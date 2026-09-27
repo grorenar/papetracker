@@ -1887,10 +1887,15 @@
     consecutiveErrors: 0
   };
 
+  // Les clés de stockage sont propres à l'avion suivi (icao24) : passer en mode test puis revenir à
+  // F-GTAU (ou l'inverse) ne doit jamais réafficher la position d'un autre appareil.
+  var STORAGE_KEY_FIX = "samu57_adsb_lastfix_" + AIRCRAFT.icao24;
+  var STORAGE_KEY_TRAIL = "samu57_adsb_trail_" + AIRCRAFT.icao24;
+
   try {
-    var savedTrail = JSON.parse(localStorage.getItem("samu57_adsb_trail") || "null");
+    var savedTrail = JSON.parse(localStorage.getItem(STORAGE_KEY_TRAIL) || "null");
     if (Array.isArray(savedTrail)) state.trail = savedTrail.filter(function(p){ return p && typeof p.lat === "number" && typeof p.lon === "number"; });
-    var savedFix = JSON.parse(localStorage.getItem("samu57_adsb_lastfix") || "null");
+    var savedFix = JSON.parse(localStorage.getItem(STORAGE_KEY_FIX) || "null");
     if (savedFix && typeof savedFix.lat === "number") state.lastFix = savedFix;
   } catch (err) {}
 
@@ -2256,7 +2261,7 @@
     state.trail.push({ lat: fix.lat, lon: fix.lon, t: fix.receivedAt });
     var cutoff = fix.receivedAt - TRAIL_MAX_MS;
     state.trail = state.trail.filter(function(p){ return p.t >= cutoff; });
-    try { localStorage.setItem("samu57_adsb_trail", JSON.stringify(state.trail)); } catch (err) {}
+    try { localStorage.setItem(STORAGE_KEY_TRAIL, JSON.stringify(state.trail)); } catch (err) {}
   }
 
   function setField(id, value){
@@ -2394,7 +2399,7 @@
         var fix = parseAircraft(match, data.now);
         if (fix && typeof fix.lat === "number" && typeof fix.lon === "number"){
           state.lastFix = fix;
-          try { localStorage.setItem("samu57_adsb_lastfix", JSON.stringify(fix)); } catch (e2) {}
+          try { localStorage.setItem(STORAGE_KEY_FIX, JSON.stringify(fix)); } catch (e2) {}
           pushTrail(fix);
           if (TEST_MODE){
             safe(function(){
