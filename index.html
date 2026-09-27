@@ -1794,9 +1794,56 @@
   var TRAIL_MAX_MS = 30 * 60 * 1000; // 30 minutes de trajectoire
 
   // Source de données : adsb.lol (agrégateur communautaire, gratuit, sans clé, schéma compatible
-  // ADS-B Exchange v2). OpenSky Network a été abandonné : ses requêtes anonymes échouaient
-  // systématiquement depuis un navigateur (CORS/fiabilité), y compris sur des avions réellement en vol.
-  function apiUrl(){ return "https://api.adsb.lol/v2/icao/" + AIRCRAFT.icao24; }
+  // ADS-B Exchange v2). Elle répond correctement en serveur-à-serveur mais ne renvoie pas d'en-tête
+  // CORS pour un appel direct depuis un navigateur (confirmé : ça bloque aussi bien en local qu'une
+  // fois la page hébergée sur un vrai domaine). Plutôt que de dépendre d'un serveur séparé à déployer,
+  // on passe par des proxys CORS publics, essayés dans l'ordre jusqu'à ce que l'un fonctionne — tout
+  // reste dans ce seul fichier HTML, sans backend à maintenir.
+  var ADSB_TARGET_BASE = "https://api.adsb.lol/v2/icao/";
+  var DATA_ENDPOINTS = [
+    function(icao){ return ADSB_TARGET_BASE + icao; }, // appel direct (au cas où le CORS serait un jour ouvert)
+    function(icao){ return "https://corsproxy.io/?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+    function(icao){ return "https://api.allorigins.win/raw?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+    function(icao){ return "https://thingproxy.freeboard.io/fetch/" + ADSB_TARGET_BASE + icao; }
+  ];
+  var DATA_ENDPOINT_NAMES = ["direct adsb.lol", "corsproxy.io", "allorigins.win", "thingproxy"];
+
+  // Essaie chaque source dans l'ordre (en commençant par la dernière qui a fonctionné) jusqu'au
+  // premier succès ; ne casse jamais l'appelant, remonte toujours (data, err) au callback.
+  function fetchAdsbData(icao, startIndex, onDone){
+    var idx = startIndex || 0;
+
+    function tryNext(){
+      if (idx >= DATA_ENDPOINTS.length){
+        onDone(null, new Error("toutes les sources ont échoué"));
+        return;
+      }
+      var thisIdx = idx;
+      var url = DATA_ENDPOINTS[thisIdx](icao);
+      var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 8000) : null;
+
+      fetch(url, { method: "GET", cache: "no-store", signal: controller ? controller.signal : undefined })
+        .then(function(resp){
+          if (timeoutId) clearTimeout(timeoutId);
+          if (!resp.ok) throw new Error("http-" + resp.status);
+          return resp.text();
+        })
+        .then(function(text){
+          var data;
+          try { data = JSON.parse(text); }
+          catch (e){ throw new Error("réponse illisible (json)"); }
+          state.workingEndpointIndex = thisIdx;
+          onDone(data, null);
+        })
+        .catch(function(err){
+          idx++;
+          tryNext();
+        });
+    }
+
+    tryNext();
+  }
 
   // ---------------- état interne ----------------
   var state = {
@@ -2199,7 +2246,9 @@
       if (state.lastFetchOk === false && state.lastError){
         updatedTxt += "  ⚠ " + state.lastError;
       } else if (state.lastFetchOk === true && state.lastMatchFound === false){
-        updatedTxt += "  (avion non détecté par la source pour l'instant)";
+        updatedTxt += "  (avion non détecté pour l'instant — source : " + (DATA_ENDPOINT_NAMES[state.workingEndpointIndex || 0] || "?") + ")";
+      } else if (state.lastFetchOk === true && state.lastMatchFound === true){
+        updatedTxt += "  (source : " + (DATA_ENDPOINT_NAMES[state.workingEndpointIndex || 0] || "?") + ")";
       }
       el.adsbUpdated.textContent = updatedTxt;
     }
@@ -2290,73 +2339,48 @@
   }
 
   function poll(){
-    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
-    var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 10000) : null;
-
-    fetch(apiUrl(), { method: "GET", cache: "no-store", signal: controller ? controller.signal : undefined })
-      .then(function(resp){
-        if (timeoutId) clearTimeout(timeoutId);
-        if (resp.status === 429){
-          state.consecutiveErrors++;
-          throw new Error("rate-limited");
-        }
-        if (!resp.ok){
-          state.consecutiveErrors++;
-          throw new Error("http-" + resp.status);
-        }
-        return resp.json();
-      })
-      .then(function(data){
-        state.consecutiveErrors = 0;
-        state.pollDelay = POLL_MS;
-        state.lastPollAt = Date.now();
-        state.lastFetchOk = true;
-        state.lastError = null;
-
-        var list = (data && Array.isArray(data.ac)) ? data.ac : null;
-        var match = list ? list.filter(function(a){ return a && typeof a.hex === "string" && a.hex.toLowerCase() === AIRCRAFT.icao24.toLowerCase(); })[0] : null;
-        state.lastMatchFound = !!match;
-
-        if (match){
-          var fix = parseAircraft(match, data.now);
-          if (fix && typeof fix.lat === "number" && typeof fix.lon === "number"){
-            state.lastFix = fix;
-            try { localStorage.setItem("samu57_adsb_lastfix", JSON.stringify(fix)); } catch (err) {}
-            pushTrail(fix);
-            if (TEST_MODE){
-              safe(function(){
-                if (fix.registration && el.fRegistration) el.fRegistration.textContent = fix.registration;
-                if (fix.typeCode && el.adsbSub) el.adsbSub.textContent = "Type " + fix.typeCode + " · ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
-              });
-            }
-          }
-        }
-        // Si l'avion n'apparaît pas dans la réponse, on NE remet PAS lastFix à null :
-        // on conserve la dernière position connue et son âge continuera de s'afficher.
-        safe(render);
-      })
-      .catch(function(err){
+    fetchAdsbData(AIRCRAFT.icao24, state.workingEndpointIndex || 0, function(data, err){
+      if (err){
         state.consecutiveErrors++;
         state.lastPollAt = Date.now();
         state.lastFetchOk = false;
         state.lastMatchFound = false;
-        if (err && err.name === "AbortError"){
-          state.lastError = "délai dépassé (10 s sans réponse)";
-        } else if (err instanceof TypeError){
-          // Chrome/Firefox lèvent un TypeError générique ("Failed to fetch") aussi bien pour un
-          // problème réseau que pour un blocage CORS — impossible de distinguer les deux ici,
-          // mais ça permet d'orienter le diagnostic (à vérifier dans la console du navigateur, F12).
-          state.lastError = "requête bloquée (réseau ou CORS) — voir console navigateur (F12)";
-        } else {
-          state.lastError = (err && err.message) ? err.message : "erreur inconnue";
-        }
-        // Backoff progressif en cas d'erreurs répétées (rate limit / réseau), plafonné à 2 min.
+        state.lastError = "toutes les sources ADS-B sont indisponibles pour le moment";
         state.pollDelay = Math.min(120000, POLL_MS * Math.pow(1.6, Math.min(state.consecutiveErrors, 6)));
         safe(render);
-      })
-      .finally(function(){
         state.pollTimer = setTimeout(poll, state.pollDelay);
-      });
+        return;
+      }
+
+      state.consecutiveErrors = 0;
+      state.pollDelay = POLL_MS;
+      state.lastPollAt = Date.now();
+      state.lastFetchOk = true;
+      state.lastError = null;
+
+      var list = (data && Array.isArray(data.ac)) ? data.ac : null;
+      var match = list ? list.filter(function(a){ return a && typeof a.hex === "string" && a.hex.toLowerCase() === AIRCRAFT.icao24.toLowerCase(); })[0] : null;
+      state.lastMatchFound = !!match;
+
+      if (match){
+        var fix = parseAircraft(match, data.now);
+        if (fix && typeof fix.lat === "number" && typeof fix.lon === "number"){
+          state.lastFix = fix;
+          try { localStorage.setItem("samu57_adsb_lastfix", JSON.stringify(fix)); } catch (e2) {}
+          pushTrail(fix);
+          if (TEST_MODE){
+            safe(function(){
+              if (fix.registration && el.fRegistration) el.fRegistration.textContent = fix.registration;
+              if (fix.typeCode && el.adsbSub) el.adsbSub.textContent = "Type " + fix.typeCode + " · ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
+            });
+          }
+        }
+      }
+      // Si l'avion n'apparaît pas dans la réponse, on NE remet PAS lastFix à null :
+      // on conserve la dernière position connue et son âge continuera de s'afficher.
+      safe(render);
+      state.pollTimer = setTimeout(poll, state.pollDelay);
+    });
   }
 
   function startClockTick(){
