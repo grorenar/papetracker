@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <style>
   :root{
     color-scheme: dark;
@@ -446,6 +447,153 @@
   .live-card.collapsed .live-video-wrap,
   .live-card.collapsed .live-foot{ display: none; }
   .live-card.collapsed .live-collapse-btn{ transform: rotate(180deg); }
+
+  /* ---------- ADS-B suivi avion ---------- */
+  .adsb-card{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 18px;
+  }
+  .adsb-head{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .adsb-badge{
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    border: 1px solid var(--border);
+    background: rgba(99,121,106,0.08);
+    padding: 3px 8px;
+    border-radius: 3px;
+    transition: color .3s, border-color .3s, background .3s;
+  }
+  .adsb-badge .dot{
+    width: 6px; height: 6px; border-radius: 50%;
+    background: currentColor;
+  }
+  .adsb-badge.ok{ color: var(--accent-ok); border-color: rgba(53,217,118,0.4); background: rgba(53,217,118,0.08); }
+  .adsb-badge.ok .dot{ animation: pulse-slow 1.6s ease-in-out infinite; }
+  .adsb-badge.ground{ color: var(--focus); border-color: rgba(87,217,255,0.4); background: rgba(87,217,255,0.08); }
+  .adsb-badge.warn{ color: var(--accent-warn); border-color: rgba(255,179,64,0.4); background: rgba(255,179,64,0.08); }
+  .adsb-badge.off{ color: var(--muted); border-color: var(--border); }
+  .adsb-status-row{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .adsb-status{
+    font-family: 'Oswald', sans-serif;
+    font-size: 14px;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+  }
+  .adsb-status.ok{ color: var(--accent-ok); }
+  .adsb-status.ground{ color: var(--focus); }
+  .adsb-status.warn{ color: var(--accent-warn); }
+  .adsb-updated{ font-size: 10.5px; color: var(--muted-2); }
+  .adsb-body{
+    display: grid;
+    grid-template-columns: minmax(230px, 320px) 1fr;
+    gap: 0;
+  }
+  @media (max-width: 720px){
+    .adsb-body{ grid-template-columns: 1fr; }
+  }
+  .adsb-data{
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px 10px;
+    align-content: start;
+    border-right: 1px solid var(--border);
+  }
+  @media (max-width: 720px){
+    .adsb-data{ border-right: none; border-bottom: 1px solid var(--border); }
+  }
+  .adsb-field{ display: flex; flex-direction: column; gap: 1px; }
+  .adsb-field-label{ font-size: 9.5px; letter-spacing: 0.06em; color: var(--muted-2); text-transform: uppercase; }
+  .adsb-field-value{ font-size: 12px; color: var(--text); }
+  .adsb-field-value.dim{ color: var(--muted); }
+  .adsb-field.wide{ grid-column: 1 / -1; }
+  .adsb-map-wrap{
+    position: relative;
+    min-height: 260px;
+  }
+  .adsb-map{
+    position: absolute;
+    inset: 0;
+    background: #0a0f0b;
+  }
+  .adsb-map-msg{
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 16px;
+    font-size: 11px;
+    color: var(--muted);
+    background: rgba(6,9,7,0.75);
+  }
+  .adsb-map-msg.show{ display: flex; }
+  .adsb-recenter-btn{
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 500;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 10.5px;
+    padding: 5px 9px;
+    border-radius: 3px;
+    cursor: pointer;
+    display: none;
+  }
+  .adsb-recenter-btn.show{ display: block; }
+  .adsb-recenter-btn:hover{ border-color: var(--accent-ok); color: var(--accent-ok); }
+  .adsb-plane-icon{ transform-origin: 50% 50%; filter: drop-shadow(0 0 2px rgba(0,0,0,0.8)); }
+  .adsb-plane-icon.on-ground{ opacity: 0.75; }
+  .maplibregl-popup-content{ background: var(--panel); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
+  .maplibregl-popup-tip{ border-top-color: var(--panel); border-bottom-color: var(--panel); }
+  .adsb-airport-dot{
+    width: 9px; height: 9px; border-radius: 50%;
+    background: rgba(87,217,255,0.4); border: 1.5px solid #57d9ff;
+  }
+  .adsb-metz-dot{
+    width: 11px; height: 11px; border-radius: 50%;
+    background: rgba(53,217,118,0.6); border: 2px solid #35d976;
+  }
+  .adsb-foot{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    font-size: 10.5px;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+  .adsb-foot-note{ color: var(--muted-2); margin-left: auto; text-align: right; }
 
   /* ---------- grid ---------- */
   main{
@@ -901,6 +1049,47 @@
         <span class="live-foot-note">Image et son sont deux flux distincts (le direct KTO les diffuse séparément) &mdash; un léger décalage est possible.</span>
       </div>
     </div>
+
+    <div class="adsb-card" id="adsbCard">
+      <div class="adsb-head">
+        <span class="adsb-badge" id="adsbBadge"><span class="dot"></span>ADS-B</span>
+        <span class="live-name" id="adsbTitle">SUIVI ADS-B &mdash; F-GTAU</span>
+        <span class="live-sub" id="adsbSub">Airbus A321-212 &middot; Air France</span>
+      </div>
+      <div class="adsb-status-row">
+        <span class="adsb-status" id="adsbStatus">&#9898; DONNÉES ADS-B INDISPONIBLES</span>
+        <span class="adsb-updated" id="adsbUpdated">Dernière mise à jour : &mdash;</span>
+      </div>
+      <div class="adsb-body">
+        <div class="adsb-data" id="adsbData">
+          <div class="adsb-field"><span class="adsb-field-label">Immatriculation</span><span class="adsb-field-value" id="fRegistration">F-GTAU</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">ICAO24</span><span class="adsb-field-value" id="fIcao">394C14</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Callsign</span><span class="adsb-field-value" id="fCallsign">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Catégorie</span><span class="adsb-field-value" id="fCategory">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Altitude</span><span class="adsb-field-value" id="fAltitude">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Vitesse sol</span><span class="adsb-field-value" id="fSpeed">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Cap</span><span class="adsb-field-value" id="fHeading">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Taux vertical</span><span class="adsb-field-value" id="fVrate">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Latitude</span><span class="adsb-field-value" id="fLat">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Longitude</span><span class="adsb-field-value" id="fLon">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Squawk</span><span class="adsb-field-value" id="fSquawk">N/A</span></div>
+          <div class="adsb-field"><span class="adsb-field-label">Dernière position</span><span class="adsb-field-value" id="fAge">N/A</span></div>
+          <div class="adsb-field wide"><span class="adsb-field-label">Distance / Metz</span><span class="adsb-field-value" id="fDistMetz">N/A</span></div>
+          <div class="adsb-field wide"><span class="adsb-field-label">Distance / ETZ (Metz-Nancy-Lorraine)</span><span class="adsb-field-value" id="fDistEtz">N/A</span></div>
+          <div class="adsb-field wide"><span class="adsb-field-label">ETA estimée ETZ (indicative, non officielle)</span><span class="adsb-field-value" id="fEta">N/A</span></div>
+        </div>
+        <div class="adsb-map-wrap">
+          <div class="adsb-map" id="adsbMap"></div>
+          <div class="adsb-map-msg" id="adsbMapMsg">Carte indisponible pour le moment.</div>
+          <button class="adsb-recenter-btn" id="adsbRecenterBtn" title="Recentrer la carte sur l'avion">&#8982; Recentrer</button>
+        </div>
+      </div>
+      <div class="adsb-foot">
+        <span>Source : ADS-B / adsb.lol (accès public, communautaire)</span>
+        <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
+      </div>
+    </div>
+
     <div class="grid" id="camGrid"></div>
   </main>
 
@@ -1554,6 +1743,644 @@
   initLiveAudio();
   tick();
   setInterval(tick, 1000);
+})();
+</script>
+
+<!-- ================= MODULE ADS-B (isolé, indépendant du reste de la page) ================= -->
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // Config de l'avion suivi — modifiable facilement pour changer d'appareil.
+  var AIRCRAFT = {
+    registration: "F-GTAU",
+    icao24: "394c14",
+    type: "Airbus A321-212",
+    operator: "Air France"
+  };
+  var TEST_MODE = false;
+
+  // Mode test : ajouter ?icao24=XXXXXX à l'URL de la page (dans la barre d'adresse) permet de suivre
+  // temporairement n'importe quel autre avion, pour vérifier que le module fonctionne avec un appareil
+  // actuellement en vol. N'affecte jamais le réglage par défaut (F-GTAU) tant que le paramètre est absent.
+  (function applyTestOverride(){
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var testIcao = params.get("icao24");
+      if (testIcao && /^[0-9a-fA-F]{6}$/.test(testIcao)){
+        AIRCRAFT = {
+          registration: (params.get("reg") || "TEST").toUpperCase(),
+          icao24: testIcao.toLowerCase(),
+          type: "N/A (mode test)",
+          operator: "N/A (mode test)"
+        };
+        TEST_MODE = true;
+      }
+    } catch (err) {}
+  })();
+
+  var METZ = { lat: 49.1193, lon: 6.1757, name: "Metz (centre)" };
+  var ETZ = { lat: 48.9822, lon: 6.2514, name: "Metz-Nancy-Lorraine (ETZ)" };
+  var NEARBY_AIRPORTS = [
+    ETZ,
+    { lat: 48.6921, lon: 6.2306, name: "Nancy-Essey (LFSN)" },
+    { lat: 49.6233, lon: 6.2044, name: "Luxembourg (ELLX)" }
+  ];
+
+  var STALE_MS = 60 * 1000;        // au-delà, on considère la position "ancienne"
+  var LOST_MS = 10 * 60 * 1000;    // au-delà, on n'affiche plus la traînée/position comme pertinente
+  var POLL_MS = 15000;             // intervalle de rafraîchissement normal
+  var TRAIL_MAX_MS = 30 * 60 * 1000; // 30 minutes de trajectoire
+
+  // Source de données : adsb.lol (agrégateur communautaire, gratuit, sans clé, schéma compatible
+  // ADS-B Exchange v2). OpenSky Network a été abandonné : ses requêtes anonymes échouaient
+  // systématiquement depuis un navigateur (CORS/fiabilité), y compris sur des avions réellement en vol.
+  function apiUrl(){ return "https://api.adsb.lol/v2/icao/" + AIRCRAFT.icao24; }
+
+  // ---------------- état interne ----------------
+  var state = {
+    lastFix: null,        // {lat, lon, altBaro, altGeo, onGround, velocity, track, vrate, callsign, squawk, category, lastContact, timePosition, receivedAt}
+    trail: [],
+    map: null,
+    marker: null,
+    polyline: null,
+    metzMarker: null,
+    userMovedMap: false,
+    pollTimer: null,
+    pollDelay: POLL_MS,
+    consecutiveErrors: 0
+  };
+
+  try {
+    var savedTrail = JSON.parse(localStorage.getItem("samu57_adsb_trail") || "null");
+    if (Array.isArray(savedTrail)) state.trail = savedTrail.filter(function(p){ return p && typeof p.lat === "number" && typeof p.lon === "number"; });
+    var savedFix = JSON.parse(localStorage.getItem("samu57_adsb_lastfix") || "null");
+    if (savedFix && typeof savedFix.lat === "number") state.lastFix = savedFix;
+  } catch (err) {}
+
+  // ---------------- DOM refs ----------------
+  var el = {};
+  ["adsbBadge","adsbStatus","adsbUpdated","adsbTitle","adsbSub","fRegistration","fIcao","fCallsign","fCategory",
+   "fAltitude","fSpeed","fHeading","fVrate","fLat","fLon","fSquawk","fAge","fDistMetz",
+   "fDistEtz","fEta","adsbMap","adsbMapMsg","adsbRecenterBtn"].forEach(function(id){
+    el[id] = document.getElementById(id);
+  });
+
+  function safe(fn){
+    try { fn(); } catch (err) { /* le module ADS-B ne doit jamais casser le reste de la page */ }
+  }
+
+  // ---------------- utilitaires géo ----------------
+  var CATEGORY_LABELS = {
+    A0: "Sans info", A1: "Léger (<7 t)", A2: "Petit (7-34 t)", A3: "Grand (34-136 t)",
+    A4: "Grand à forte turbulence de sillage", A5: "Poids lourd (>136 t)",
+    A6: "Haute performance / grande vitesse", A7: "Rotorcraft",
+    B0: "Sans info", B1: "Planeur", B2: "Plus léger que l'air", B3: "Parachutiste",
+    B4: "Ultra-léger / ULM", B6: "Drone (UAV)", B7: "Spatial / transatmosphérique",
+    C0: "Sans info", C1: "Véhicule d'urgence au sol", C2: "Véhicule de service au sol",
+    C3: "Obstacle ponctuel", C4: "Obstacle groupé", C5: "Obstacle linéaire"
+  };
+
+  function toRad(d){ return d * Math.PI / 180; }
+  function toDeg(r){ return r * 180 / Math.PI; }
+
+  function haversineKm(lat1, lon1, lat2, lon2){
+    var R = 6371;
+    var dLat = toRad(lat2 - lat1);
+    var dLon = toRad(lon2 - lon1);
+    var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function bearingDeg(lat1, lon1, lat2, lon2){
+    var y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+    var x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+            Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+  }
+
+  function compassPoint(deg){
+    var pts = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+    return pts[Math.round(deg / 22.5) % 16];
+  }
+
+  function fmtNum(n, d){
+    if (n === null || n === undefined || isNaN(n)) return null;
+    return n.toLocaleString("fr-FR", { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 });
+  }
+
+  function fmtAge(ms){
+    if (ms === null || ms === undefined) return "N/A";
+    var s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return "il y a " + s + " s";
+    var m = Math.floor(s / 60);
+    var rs = s % 60;
+    if (m < 60) return "il y a " + m + " min " + rs + " s";
+    var h = Math.floor(m / 60);
+    return "il y a " + h + " h " + (m % 60) + " min";
+  }
+
+  // ---------------- rendu du statut ----------------
+  function applyBadge(cls, text){
+    if (el.adsbBadge){
+      el.adsbBadge.className = "adsb-badge" + (cls ? " " + cls : "");
+      el.adsbBadge.querySelector("span:last-child") ? null : null;
+    }
+    if (el.adsbStatus){
+      el.adsbStatus.className = "adsb-status" + (cls ? " " + cls : "");
+      el.adsbStatus.innerHTML = text;
+    }
+  }
+
+  function computeStatus(fix, now){
+    if (!fix) return { code: "unavailable", label: "&#9898; DONNÉES ADS-B INDISPONIBLES" };
+    var age = now - fix.receivedAt;
+    if (age > LOST_MS){
+      return { code: "unavailable", label: "&#9898; DONNÉES ADS-B INDISPONIBLES &mdash; dernière position " + fmtAge(age) };
+    }
+    if (fix.onGround === true){
+      return { code: "ground", label: "&#128309; AU SOL" };
+    }
+    if (age > STALE_MS){
+      return { code: "warn", label: "&#128992; DERNIÈRE POSITION ANCIENNE (" + fmtAge(age) + ")" };
+    }
+    if (fix.onGround === false){
+      return { code: "ok", label: "&#128994; EN VOL" };
+    }
+    // on_ground indisponible : ne jamais affirmer "EN VOL" sans confirmation.
+    // On se base prudemment sur l'altitude/la vitesse si elles sont cohérentes avec un vol.
+    if ((fix.altBaro !== null && fix.altBaro > 500) || (fix.velocity !== null && fix.velocity > 50)){
+      return { code: "ok", label: "&#128994; EN VOL (statut sol non confirmé)" };
+    }
+    return { code: "warn", label: "&#128992; STATUT INCERTAIN" };
+  }
+
+  // ---------------- carte MapLibre GL JS ----------------
+  var PLANE_SVG =
+    '<svg viewBox="0 0 24 24" width="30" height="30" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M12 1.5 L14 9 L22.5 13 L22.5 15 L14 12.5 L14 18 L17.5 20.5 L17.5 22 L12 20.5 L6.5 22 L6.5 20.5 L10 18 L10 12.5 L1.5 15 L1.5 13 L10 9 Z" ' +
+    'fill="{COLOR}" stroke="#06110a" stroke-width="0.6"/></svg>';
+
+  function planeSvg(onGround){
+    var color = onGround ? "#57d9ff" : "#35d976";
+    return PLANE_SVG.replace("{COLOR}", color);
+  }
+
+  var TRAIL_SOURCE_ID = "adsb-trail";
+  var TRAIL_LAYER_ID = "adsb-trail-line";
+
+  function addTrailLayer(){
+    if (!state.map || state.map.getSource(TRAIL_SOURCE_ID)) return;
+    state.map.addSource(TRAIL_SOURCE_ID, {
+      type: "geojson",
+      data: { type: "Feature", geometry: { type: "LineString", coordinates: [] } }
+    });
+    state.map.addLayer({
+      id: TRAIL_LAYER_ID,
+      type: "line",
+      source: TRAIL_SOURCE_ID,
+      paint: { "line-color": "#ffb340", "line-width": 2, "line-opacity": 0.7 }
+    });
+  }
+
+  function addStaticMarkers(){
+    var metzEl = document.createElement("div");
+    metzEl.className = "adsb-metz-dot";
+    new maplibregl.Marker({ element: metzEl })
+      .setLngLat([METZ.lon, METZ.lat])
+      .setPopup(new maplibregl.Popup({ offset: 10 }).setText("📍 Metz"))
+      .addTo(state.map);
+
+    NEARBY_AIRPORTS.forEach(function(ap){
+      var apEl = document.createElement("div");
+      apEl.className = "adsb-airport-dot";
+      new maplibregl.Marker({ element: apEl })
+        .setLngLat([ap.lon, ap.lat])
+        .setPopup(new maplibregl.Popup({ offset: 8 }).setText("✈️ " + ap.name))
+        .addTo(state.map);
+    });
+  }
+
+  // Plusieurs fournisseurs de tuiles testés en parallèle : certains réseaux
+  // hospitaliers/pare-feux bloquent un domaine mais pas un autre. On choisit
+  // automatiquement le premier qui répond, sans jamais planter le module.
+  // NB : plusieurs fournisseurs de tuiles "gratuits" imposent en réalité une clé API ou bloquent l'usage
+  // embarqué (tile.openstreetmap.org renvoie une tuile "Access blocked" en HTTP 200 ; CARTO exige
+  // désormais une clé). On utilise donc les couches Esri (ArcGIS Online), utilisables sans clé pour un
+  // usage de ce type, avec un style sombre cohérent avec le reste de la page.
+  var TILE_CANDIDATES = [
+    { name: "Esri Dark Gray Canvas", url: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", attribution: "&copy; Esri &mdash; World Dark Gray Base" },
+    { name: "Esri World Street Map", url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", attribution: "&copy; Esri &mdash; World Street Map" },
+    { name: "OpenTopoMap", url: "https://a.tile.opentopomap.org/{z}/{x}/{y}.png", attribution: "&copy; OpenStreetMap contributors, SRTM &mdash; OpenTopoMap" }
+  ];
+  var PROBE_TILE = { z: 6, x: 32, y: 22 }; // tuile couvrant l'Europe de l'Ouest, sert uniquement à tester l'accès réseau
+  var PROBE_TIMEOUT_MS = 4000;
+
+  function showMapUnavailable(msg){
+    if (el.adsbMapMsg){
+      el.adsbMapMsg.textContent = msg || "Carte indisponible pour le moment.";
+      el.adsbMapMsg.classList.add("show");
+    }
+  }
+
+  function hideMapUnavailable(){
+    if (el.adsbMapMsg) el.adsbMapMsg.classList.remove("show");
+  }
+
+  function probeTile(candidate, cb){
+    var url = candidate.url
+      .replace("{z}", PROBE_TILE.z).replace("{x}", PROBE_TILE.x).replace("{y}", PROBE_TILE.y);
+    var img = new Image();
+    var settled = false;
+    var timer = setTimeout(function(){
+      if (settled) return;
+      settled = true;
+      cb(false);
+    }, PROBE_TIMEOUT_MS);
+    img.onload = function(){ if (settled) return; settled = true; clearTimeout(timer); cb(true); };
+    img.onerror = function(){ if (settled) return; settled = true; clearTimeout(timer); cb(false); };
+    img.src = url + (url.indexOf("?") >= 0 ? "&" : "?") + "_probe=" + Date.now();
+  }
+
+  function findWorkingTileSource(cb){
+    var doneCount = 0;
+    var settled = false;
+    TILE_CANDIDATES.forEach(function(candidate){
+      probeTile(candidate, function(ok){
+        doneCount++;
+        if (ok && !settled){
+          settled = true;
+          cb(candidate);
+        } else if (!ok && doneCount === TILE_CANDIDATES.length && !settled){
+          settled = true;
+          cb(null);
+        }
+      });
+    });
+  }
+
+  function createMap(tileSource){
+    try {
+      state.map = new maplibregl.Map({
+        container: el.adsbMap,
+        style: {
+          version: 8,
+          sources: {
+            "osm-tiles": {
+              type: "raster",
+              tiles: [tileSource.url],
+              tileSize: 256,
+              maxzoom: 19,
+              attribution: tileSource.attribution
+            }
+          },
+          layers: [
+            { id: "osm-tiles", type: "raster", source: "osm-tiles" }
+          ]
+        },
+        center: [METZ.lon, METZ.lat],
+        zoom: 8,
+        attributionControl: true
+      });
+
+      hideMapUnavailable();
+
+      state.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
+
+      state.map.on("load", function(){
+        safe(function(){
+          addTrailLayer();
+          addStaticMarkers();
+          if (state.lastFix) updateMap(state.lastFix, Date.now());
+        });
+      });
+
+      state.map.on("error", function(e){
+        // Erreur de tuile/réseau après coup : on ne casse pas le module, on garde la carte affichée telle quelle.
+      });
+
+      state.map.on("dragstart", function(){ state.userMovedMap = true; showRecenter(true); });
+      state.map.on("zoomstart", function(e){
+        if (e && e.originalEvent){ state.userMovedMap = true; showRecenter(true); }
+      });
+
+      if (el.adsbRecenterBtn){
+        el.adsbRecenterBtn.addEventListener("click", function(){
+          state.userMovedMap = false;
+          showRecenter(false);
+          if (state.lastFix) frameOnAircraft(state.lastFix.lat, state.lastFix.lon);
+        });
+      }
+
+      setTimeout(function(){ safe(function(){ state.map.resize(); }); }, 250);
+    } catch (err) {
+      showMapUnavailable("Carte indisponible : erreur d'initialisation (" + (err && err.message ? err.message : "inconnue") + ").");
+    }
+  }
+
+  function initMap(){
+    if (state.map || state.mapInitStarted) return;
+    state.mapInitStarted = true;
+    if (!window.maplibregl || !el.adsbMap){
+      showMapUnavailable("Carte indisponible : la bibliothèque cartographique n'a pas pu être chargée depuis ce poste.");
+      return;
+    }
+    showMapUnavailable("Recherche d'un fond de carte accessible depuis ce poste…");
+    findWorkingTileSource(function(tileSource){
+      if (!tileSource){
+        showMapUnavailable("Carte indisponible : aucun fond de carte (OpenStreetMap / CARTO) n'est accessible depuis ce réseau. Les données ADS-B ci-contre restent à jour normalement.");
+        return;
+      }
+      safe(function(){ createMap(tileSource); });
+    });
+  }
+
+  // Conservé pour compatibilité : renvoie la carte si déjà initialisée, sans jamais la (re)créer de façon synchrone.
+  function ensureMap(){
+    return state.map || null;
+  }
+
+  function showRecenter(show){
+    if (el.adsbRecenterBtn) el.adsbRecenterBtn.classList.toggle("show", !!show);
+  }
+
+  // Cadrage ~100 km de rayon autour de l'avion (bounding box en degrés).
+  function frameOnAircraft(lat, lon){
+    if (!state.map) return;
+    var dLat = 100 / 111; // ~0.9°
+    var dLon = 100 / (111 * Math.max(0.2, Math.cos(toRad(lat))));
+    var bounds = new maplibregl.LngLatBounds(
+      [lon - dLon, lat - dLat],
+      [lon + dLon, lat + dLat]
+    );
+    // on garantit aussi que Metz reste visible si l'avion en est proche
+    bounds.extend([METZ.lon, METZ.lat]);
+    state.map.fitBounds(bounds, { animate: true, maxZoom: 10, padding: 20 });
+  }
+
+  function updateMap(fix, now){
+    var map = ensureMap();
+    if (!map) return;
+
+    var isFresh = fix && (now - fix.receivedAt) <= LOST_MS;
+    if (!isFresh) return; // on ne déplace pas l'icône avec une position trop ancienne
+
+    if (!map.isStyleLoaded()){
+      // le style se charge encore ; l'événement "load" rappellera updateMap()
+      return;
+    }
+
+    var lngLat = [fix.lon, fix.lat];
+
+    if (!state.marker){
+      var markerEl = document.createElement("div");
+      markerEl.className = "adsb-plane-icon" + (fix.onGround ? " on-ground" : "");
+      markerEl.innerHTML = planeSvg(fix.onGround === true);
+      state.markerEl = markerEl;
+      state.marker = new maplibregl.Marker({
+        element: markerEl,
+        rotationAlignment: "map",
+        pitchAlignment: "map",
+        rotation: (typeof fix.track === "number") ? fix.track : 0
+      }).setLngLat(lngLat).addTo(map);
+    } else {
+      state.marker.setLngLat(lngLat);
+      state.marker.setRotation((typeof fix.track === "number") ? fix.track : 0);
+      if (state.markerEl){
+        var wasGround = state.markerEl.classList.contains("on-ground");
+        if (wasGround !== (fix.onGround === true)){
+          state.markerEl.className = "adsb-plane-icon" + (fix.onGround ? " on-ground" : "");
+          state.markerEl.innerHTML = planeSvg(fix.onGround === true);
+        }
+      }
+    }
+
+    var popupHtml = "<strong>" + AIRCRAFT.registration + "</strong><br>" +
+      (fix.callsign || "Callsign N/A") + "<br>" +
+      (fix.onGround ? "Au sol" : "En vol");
+    state.marker.setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(popupHtml));
+
+    var trailSource = map.getSource(TRAIL_SOURCE_ID);
+    if (trailSource){
+      trailSource.setData({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: state.trail.map(function(p){ return [p.lon, p.lat]; }) }
+      });
+    }
+
+    if (!state.userMovedMap){
+      frameOnAircraft(fix.lat, fix.lon);
+    }
+  }
+
+  // ---------------- traitement des données ----------------
+  function pushTrail(fix){
+    state.trail.push({ lat: fix.lat, lon: fix.lon, t: fix.receivedAt });
+    var cutoff = fix.receivedAt - TRAIL_MAX_MS;
+    state.trail = state.trail.filter(function(p){ return p.t >= cutoff; });
+    try { localStorage.setItem("samu57_adsb_trail", JSON.stringify(state.trail)); } catch (err) {}
+  }
+
+  function setField(id, value){
+    if (el[id]) el[id].textContent = (value === null || value === undefined || value === "") ? "N/A" : value;
+  }
+
+  function render(){
+    var now = Date.now();
+    var fix = state.lastFix;
+    var status = computeStatus(fix, now);
+    applyBadge(status.code === "ok" ? "ok" : (status.code === "ground" ? "ground" : (status.code === "warn" ? "warn" : "off")), status.label);
+
+    if (el.adsbUpdated){
+      var updatedTxt = "Dernière mise à jour : " + (state.lastPollAt ? fmtAge(now - state.lastPollAt) : "—");
+      if (state.lastFetchOk === false && state.lastError){
+        updatedTxt += "  ⚠ " + state.lastError;
+      } else if (state.lastFetchOk === true && state.lastMatchFound === false){
+        updatedTxt += "  (avion non détecté par la source pour l'instant)";
+      }
+      el.adsbUpdated.textContent = updatedTxt;
+    }
+
+    if (!fix){
+      ["fCallsign","fCategory","fAltitude","fSpeed","fHeading","fVrate","fLat","fLon","fSquawk","fAge","fDistMetz","fDistEtz","fEta"].forEach(function(id){ setField(id, "N/A"); });
+      return;
+    }
+
+    var age = now - fix.receivedAt;
+    setField("fCallsign", fix.callsign || "N/A");
+    setField("fCategory", (fix.category !== null && CATEGORY_LABELS[fix.category]) ? CATEGORY_LABELS[fix.category] : "N/A");
+
+    if (fix.altBaro !== null){
+      var altM = Math.round(fix.altBaro / 3.28084);
+      setField("fAltitude", fmtNum(Math.round(fix.altBaro)) + " ft (" + fmtNum(altM) + " m)");
+    } else if (fix.onGround === true){
+      setField("fAltitude", "Au sol");
+    } else { setField("fAltitude", "N/A"); }
+
+    if (fix.velocity !== null){
+      var kmh = fix.velocity * 1.852;
+      setField("fSpeed", fmtNum(Math.round(fix.velocity)) + " kt / " + fmtNum(Math.round(kmh)) + " km/h");
+    } else { setField("fSpeed", "N/A"); }
+
+    setField("fHeading", (fix.track !== null) ? fmtNum(Math.round(fix.track)) + "°" : "N/A");
+
+    if (fix.vrate !== null){
+      var vms = fix.vrate * 0.00508;
+      setField("fVrate", (fix.vrate >= 0 ? "+" : "") + fmtNum(Math.round(fix.vrate)) + " ft/min (" + (vms >= 0 ? "+" : "") + vms.toFixed(1) + " m/s)");
+    } else { setField("fVrate", "N/A"); }
+
+    setField("fLat", fix.lat.toFixed(4) + "°");
+    setField("fLon", fix.lon.toFixed(4) + "°");
+    setField("fSquawk", fix.squawk || "N/A");
+    setField("fAge", fmtAge(age));
+
+    var distMetz = haversineKm(fix.lat, fix.lon, METZ.lat, METZ.lon);
+    var distEtz = haversineKm(fix.lat, fix.lon, ETZ.lat, ETZ.lon);
+    var brg = bearingDeg(fix.lat, fix.lon, METZ.lat, METZ.lon);
+    setField("fDistMetz", fmtNum(Math.round(distMetz)) + " km (" + compassPoint(brg) + " de Metz)");
+    setField("fDistEtz", fmtNum(Math.round(distEtz)) + " km");
+
+    if (status.code === "ok" && fix.velocity && fix.velocity > 3 && fix.onGround === false){
+      var etaMin = (distEtz / (fix.velocity * 1.852)) * 60;
+      if (etaMin > 0 && etaMin < 360){
+        var etaDate = new Date(now + etaMin * 60000);
+        var hh = String(etaDate.getHours()).padStart(2, "0");
+        var mm = String(etaDate.getMinutes()).padStart(2, "0");
+        setField("fEta", "≈ " + hh + ":" + mm + " (estimation)");
+      } else {
+        setField("fEta", "N/A");
+      }
+    } else {
+      setField("fEta", "N/A");
+    }
+
+    updateMap(fix, now);
+  }
+
+  // ---------------- appel API ----------------
+  // Format adsb.lol /v2/icao/{hex} — un objet par avion dans data.ac[], compatible schéma ADS-B Exchange v2.
+  function parseAircraft(ac, serverNow){
+    if (!ac || typeof ac !== "object") return null;
+    var groundFlag = (ac.alt_baro === "ground");
+    var altBaro = (typeof ac.alt_baro === "number") ? ac.alt_baro : null;
+    var ageSec = (typeof ac.seen_pos === "number") ? ac.seen_pos : (typeof ac.seen === "number" ? ac.seen : 0);
+
+    return {
+      icao24: ac.hex || null,
+      callsign: (ac.flight || "").trim() || null,
+      registration: ac.r || null,
+      typeCode: ac.t || null,
+      lon: (typeof ac.lon === "number") ? ac.lon : null,
+      lat: (typeof ac.lat === "number") ? ac.lat : null,
+      altBaro: altBaro,
+      onGround: groundFlag ? true : (altBaro !== null ? false : null),
+      velocity: (typeof ac.gs === "number") ? ac.gs : null,          // noeuds
+      track: (typeof ac.track === "number") ? ac.track : null,
+      vrate: (typeof ac.baro_rate === "number") ? ac.baro_rate : (typeof ac.geom_rate === "number" ? ac.geom_rate : null), // ft/min
+      altGeo: (typeof ac.alt_geom === "number") ? ac.alt_geom : null,
+      squawk: ac.squawk || null,
+      category: ac.category || null,
+      // On recale l'horodatage de la position en tenant compte du délai déjà signalé par la source
+      // (seen_pos = secondes écoulées depuis cette position au moment de la réponse serveur).
+      receivedAt: Date.now() - Math.round(ageSec * 1000)
+    };
+  }
+
+  function poll(){
+    var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 10000) : null;
+
+    fetch(apiUrl(), { method: "GET", cache: "no-store", signal: controller ? controller.signal : undefined })
+      .then(function(resp){
+        if (timeoutId) clearTimeout(timeoutId);
+        if (resp.status === 429){
+          state.consecutiveErrors++;
+          throw new Error("rate-limited");
+        }
+        if (!resp.ok){
+          state.consecutiveErrors++;
+          throw new Error("http-" + resp.status);
+        }
+        return resp.json();
+      })
+      .then(function(data){
+        state.consecutiveErrors = 0;
+        state.pollDelay = POLL_MS;
+        state.lastPollAt = Date.now();
+        state.lastFetchOk = true;
+        state.lastError = null;
+
+        var list = (data && Array.isArray(data.ac)) ? data.ac : null;
+        var match = list ? list.filter(function(a){ return a && typeof a.hex === "string" && a.hex.toLowerCase() === AIRCRAFT.icao24.toLowerCase(); })[0] : null;
+        state.lastMatchFound = !!match;
+
+        if (match){
+          var fix = parseAircraft(match, data.now);
+          if (fix && typeof fix.lat === "number" && typeof fix.lon === "number"){
+            state.lastFix = fix;
+            try { localStorage.setItem("samu57_adsb_lastfix", JSON.stringify(fix)); } catch (err) {}
+            pushTrail(fix);
+            if (TEST_MODE){
+              safe(function(){
+                if (fix.registration && el.fRegistration) el.fRegistration.textContent = fix.registration;
+                if (fix.typeCode && el.adsbSub) el.adsbSub.textContent = "Type " + fix.typeCode + " · ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
+              });
+            }
+          }
+        }
+        // Si l'avion n'apparaît pas dans la réponse, on NE remet PAS lastFix à null :
+        // on conserve la dernière position connue et son âge continuera de s'afficher.
+        safe(render);
+      })
+      .catch(function(err){
+        state.consecutiveErrors++;
+        state.lastPollAt = Date.now();
+        state.lastFetchOk = false;
+        state.lastMatchFound = false;
+        if (err && err.name === "AbortError"){
+          state.lastError = "délai dépassé (10 s sans réponse)";
+        } else if (err instanceof TypeError){
+          // Chrome/Firefox lèvent un TypeError générique ("Failed to fetch") aussi bien pour un
+          // problème réseau que pour un blocage CORS — impossible de distinguer les deux ici,
+          // mais ça permet d'orienter le diagnostic (à vérifier dans la console du navigateur, F12).
+          state.lastError = "requête bloquée (réseau ou CORS) — voir console navigateur (F12)";
+        } else {
+          state.lastError = (err && err.message) ? err.message : "erreur inconnue";
+        }
+        // Backoff progressif en cas d'erreurs répétées (rate limit / réseau), plafonné à 2 min.
+        state.pollDelay = Math.min(120000, POLL_MS * Math.pow(1.6, Math.min(state.consecutiveErrors, 6)));
+        safe(render);
+      })
+      .finally(function(){
+        state.pollTimer = setTimeout(poll, state.pollDelay);
+      });
+  }
+
+  function startClockTick(){
+    setInterval(function(){ safe(render); }, 1000);
+  }
+
+  // ---------------- démarrage ----------------
+  safe(function(){
+    if (el.fRegistration) el.fRegistration.textContent = AIRCRAFT.registration;
+    if (el.fIcao) el.fIcao.textContent = AIRCRAFT.icao24.toUpperCase();
+    if (TEST_MODE){
+      if (el.adsbTitle) el.adsbTitle.innerHTML = "SUIVI ADS-B &mdash; MODE TEST (" + AIRCRAFT.registration + ")";
+      if (el.adsbSub) el.adsbSub.textContent = "ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
+    }
+    initMap();
+    render();
+    if (!navigator.onLine){
+      applyBadge("off", "&#9898; NAVIGATEUR HORS LIGNE");
+    }
+    window.addEventListener("online", function(){ safe(poll); });
+    poll();
+    startClockTick();
+  });
+
 })();
 </script>
 </body>
