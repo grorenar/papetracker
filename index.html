@@ -1800,13 +1800,39 @@
   // on passe par des proxys CORS publics, essayés dans l'ordre jusqu'à ce que l'un fonctionne — tout
   // reste dans ce seul fichier HTML, sans backend à maintenir.
   var ADSB_TARGET_BASE = "https://api.adsb.lol/v2/icao/";
+  // Diagnostic effectué en conditions réelles (console navigateur) :
+  // - adsb.lol : blocage CORS confirmé et permanent (le serveur ne renvoie jamais l'en-tête requis).
+  // - thingproxy.freeboard.io : domaine mort (ERR_NAME_NOT_RESOLVED), service arrêté — retiré.
+  // - allorigins.win : son endpoint "/raw" ne pose pas l'en-tête CORS de façon fiable ; son endpoint
+  //   "/get" le fait, mais renvoie la réponse encapsulée dans un champ JSON "contents" à déballer.
+  // - corsproxy.io reste tenté en dernier recours (service parfois instable, mais gratuit).
   var DATA_ENDPOINTS = [
-    function(icao){ return ADSB_TARGET_BASE + icao; }, // appel direct (au cas où le CORS serait un jour ouvert)
-    function(icao){ return "https://corsproxy.io/?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
-    function(icao){ return "https://api.allorigins.win/raw?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
-    function(icao){ return "https://thingproxy.freeboard.io/fetch/" + ADSB_TARGET_BASE + icao; }
+    {
+      name: "direct adsb.lol",
+      url: function(icao){ return ADSB_TARGET_BASE + icao; },
+      unwrap: function(text){ return text; }
+    },
+    {
+      name: "allorigins.win",
+      url: function(icao){ return "https://api.allorigins.win/get?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+      unwrap: function(text){
+        var wrapper = JSON.parse(text);
+        if (!wrapper || typeof wrapper.contents !== "string") throw new Error("réponse allorigins inattendue");
+        return wrapper.contents;
+      }
+    },
+    {
+      name: "codetabs.com",
+      url: function(icao){ return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+      unwrap: function(text){ return text; }
+    },
+    {
+      name: "corsproxy.io",
+      url: function(icao){ return "https://corsproxy.io/?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+      unwrap: function(text){ return text; }
+    }
   ];
-  var DATA_ENDPOINT_NAMES = ["direct adsb.lol", "corsproxy.io", "allorigins.win", "thingproxy"];
+  var DATA_ENDPOINT_NAMES = DATA_ENDPOINTS.map(function(e){ return e.name; });
 
   // Essaie chaque source dans l'ordre (en commençant par la dernière qui a fonctionné) jusqu'au
   // premier succès ; ne casse jamais l'appelant, remonte toujours (data, err) au callback.
@@ -1819,7 +1845,8 @@
         return;
       }
       var thisIdx = idx;
-      var url = DATA_ENDPOINTS[thisIdx](icao);
+      var endpoint = DATA_ENDPOINTS[thisIdx];
+      var url = endpoint.url(icao);
       var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
       var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 8000) : null;
 
@@ -1830,8 +1857,9 @@
           return resp.text();
         })
         .then(function(text){
+          var unwrapped = endpoint.unwrap(text);
           var data;
-          try { data = JSON.parse(text); }
+          try { data = JSON.parse(unwrapped); }
           catch (e){ throw new Error("réponse illisible (json)"); }
           state.workingEndpointIndex = thisIdx;
           onDone(data, null);
