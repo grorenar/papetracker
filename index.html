@@ -1085,7 +1085,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol (accès public, communautaire) &mdash; <strong>build ADS-B rev.9</strong></span>
+        <span>Source : ADS-B / adsb.lol (accès public, communautaire) &mdash; <strong>build ADS-B rev.10</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -1848,7 +1848,10 @@
       var endpoint = DATA_ENDPOINTS[thisIdx];
       var url = endpoint.url(icao);
       var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
-      var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 8000) : null;
+      // Délai généreux : les relais publics (allorigins/codetabs) font eux-mêmes un aller-retour vers
+      // adsb.lol, et un réseau d'entreprise qui inspecte le trafic HTTPS ajoute encore de la latence —
+      // 8 s s'est révélé trop court dans ce contexte et coupait la requête avant sa réponse.
+      var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 15000) : null;
 
       fetch(url, { method: "GET", cache: "no-store", signal: controller ? controller.signal : undefined })
         .then(function(resp){
