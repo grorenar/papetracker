@@ -1174,7 +1174,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 3 vols &mdash; <strong>build ADS-B rev.13</strong></span>
+        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 2 vols &mdash; <strong>build ADS-B rev.18</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -1952,17 +1952,11 @@
       color: "#57d9ff",
       queryType: "icao",
       icao24: "4891ad"
-    },
-    {
-      id: "af400",
-      isPope: false,
-      registration: "AF400 / AF4005",
-      type: "Airbus A321 (probable)",
-      operator: "Air France",
-      color: "#ff6b6b",
-      queryType: "callsign",
-      callsigns: ["AF400", "AF4005"]
     }
+    // Troisième avion (AF400, Tarbes → Metz-Nancy ETZ) retiré le 28/09 : resté au sol, ne décollera
+    // visiblement pas — inutile de continuer à l'interroger. Pour le réintroduire un jour, reprendre
+    // un bloc { id, isPope:false, registration, type, operator, color, queryType:"callsign",
+    // callsigns:[...] } comme les autres, dans ce même tableau AIRCRAFTS.
   ];
 
   var TEST_MODE = false;
@@ -2003,6 +1997,7 @@
   var LOST_MS = 10 * 60 * 1000;    // au-delà, on n'affiche plus la traînée/position comme pertinente
   var POLL_MS = 15000;             // intervalle de rafraîchissement normal
   var TRAIL_MAX_MS = 30 * 60 * 1000; // 30 minutes de trajectoire
+  var EXTRAPOLATE_MAX_MS = 90 * 1000; // au-delà, cap/vitesse constants ne sont plus une hypothèse raisonnable
 
   // Source de données : adsb.lol (agrégateur communautaire, gratuit, sans clé, schéma compatible
   // ADS-B Exchange v2). Elle répond correctement en serveur-à-serveur mais ne renvoie pas d'en-tête
@@ -2205,6 +2200,48 @@
   function compassPoint(deg){
     var pts = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
     return pts[Math.round(deg / 22.5) % 16];
+  }
+
+  // Point d'arrivée sur une sphère à partir d'un point de départ, d'un cap et d'une distance parcourue
+  // (formule classique de navigation orthodromique — l'inverse de bearingDeg/haversineKm ci-dessus).
+  function destinationPoint(lat, lon, bearingDegrees, distKm){
+    var R = 6371;
+    var brg = toRad(bearingDegrees);
+    var lat1 = toRad(lat), lon1 = toRad(lon);
+    var angDist = distKm / R;
+    var lat2 = Math.asin(Math.sin(lat1) * Math.cos(angDist) + Math.cos(lat1) * Math.sin(angDist) * Math.cos(brg));
+    var lon2 = lon1 + Math.atan2(
+      Math.sin(brg) * Math.sin(angDist) * Math.cos(lat1),
+      Math.cos(angDist) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    return { lat: toDeg(lat2), lon: toDeg(lon2) };
+  }
+
+  // Extrapolation (dead reckoning) : entre deux sondages ADS-B, on projette la position et l'altitude
+  // à cap/vitesse/taux vertical constants depuis le dernier point réellement reçu. Volontairement
+  // désactivée : au sol (virages/arrêts imprévisibles sur les taxiways), au-delà de EXTRAPOLATE_MAX_MS
+  // (l'hypothèse "trajectoire rectiligne à vitesse constante" cesse d'être raisonnable), ou si le cap
+  // ou la vitesse manquent. Dès qu'un nouveau fix réel arrive, il redevient l'ancre : la position
+  // affichée "se recale" automatiquement, sans dérive cumulée d'un cycle sur l'autre.
+  function getDisplayFix(fix, now){
+    if (!fix) return null;
+    var age = now - fix.receivedAt;
+    if (fix.onGround === true || age <= 0 || age > EXTRAPOLATE_MAX_MS ||
+        typeof fix.track !== "number" || typeof fix.velocity !== "number"){
+      return fix;
+    }
+    var distKm = fix.velocity * 1.852 * (age / 3600000); // noeuds -> km/h, puis distance parcourue
+    var dest = destinationPoint(fix.lat, fix.lon, fix.track, distKm);
+    return {
+      icao24: fix.icao24, callsign: fix.callsign, registration: fix.registration, typeCode: fix.typeCode,
+      onGround: fix.onGround, velocity: fix.velocity, track: fix.track, vrate: fix.vrate,
+      altGeo: fix.altGeo, squawk: fix.squawk, category: fix.category, receivedAt: fix.receivedAt,
+      lat: dest.lat, lon: dest.lon,
+      altBaro: (typeof fix.altBaro === "number" && typeof fix.vrate === "number")
+        ? fix.altBaro + fix.vrate * (age / 60000) // ft/min -> ft parcourus
+        : fix.altBaro,
+      extrapolated: true
+    };
   }
 
   function fmtNum(n, d){
@@ -2515,14 +2552,19 @@
     var map = ensureMap();
     if (!map) return;
 
-    var fix = st.lastFix;
-    var isFresh = fix && (now - fix.receivedAt) <= LOST_MS;
+    var rawFix = st.lastFix;
+    var isFresh = rawFix && (now - rawFix.receivedAt) <= LOST_MS;
     if (!isFresh) return; // on ne déplace pas l'icône avec une position trop ancienne
 
     if (!map.isStyleLoaded()){
       // le style se charge encore ; l'événement "load" rappellera updateMapMarker() pour chaque avion
       return;
     }
+
+    // Position/altitude extrapolées depuis le dernier fix réel (dead reckoning, plafonné à
+    // EXTRAPOLATE_MAX_MS) : le marqueur avance en douceur entre deux sondages au lieu de sauter, et se
+    // recale automatiquement sur la vraie position dès qu'un nouveau fix arrive.
+    var fix = getDisplayFix(rawFix, now);
 
     var lngLat = [fix.lon, fix.lat];
 
@@ -2547,7 +2589,8 @@
 
     var popupHtml = "<strong>" + aircraftLabel(def) + "</strong><br>" +
       (fix.callsign || "Callsign N/A") + "<br>" +
-      (fix.onGround ? "Au sol" : "En vol");
+      (fix.onGround ? "Au sol" : "En vol") +
+      (fix.extrapolated ? "<br><em>(position estimée)</em>" : "");
     st.marker.setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(popupHtml));
 
     var trailSource = map.getSource(trailSourceId(def.id));
@@ -2583,14 +2626,19 @@
     var st = selectedState();
     if (!def || !st) return;
     var now = Date.now();
-    var fix = st.lastFix;
-    var status = computeStatus(fix, now);
+    var rawFix = st.lastFix;
+    var status = computeStatus(rawFix, now);
     applyBadge(status.code === "ok" ? "ok" : (status.code === "ground" ? "ground" : (status.code === "warn" ? "warn" : "off")), status.label);
 
     if (el.adsbTitle) el.adsbTitle.innerHTML = "SUIVI ADS-B &mdash; " + def.registration + (def.isPope ? " (vol papal)" : "");
     if (el.adsbSub) el.adsbSub.innerHTML = def.type + " &middot; " + def.operator + (TEST_MODE && def.id === "fgtau" ? " (mode test)" : "");
-    if (el.fRegistration) el.fRegistration.textContent = (fix && fix.registration) ? fix.registration : def.registration;
-    if (el.fIcao) el.fIcao.textContent = (def.queryType === "icao") ? def.icao24.toUpperCase() : ((fix && fix.icao24) ? fix.icao24.toUpperCase() : "recherche en cours…");
+    if (el.fRegistration) el.fRegistration.textContent = (rawFix && rawFix.registration) ? rawFix.registration : def.registration;
+    if (el.fIcao) el.fIcao.textContent = (def.queryType === "icao") ? def.icao24.toUpperCase() : ((rawFix && rawFix.icao24) ? rawFix.icao24.toUpperCase() : "recherche en cours…");
+
+    // Position/altitude affichées : extrapolées depuis le dernier fix réel (dead reckoning, plafonné à
+    // 90 s) pour combler l'intervalle entre deux sondages ; se recalent automatiquement sur la vraie
+    // valeur dès qu'un nouveau fix arrive (aucune dérive cumulée d'un cycle sur l'autre).
+    var fix = getDisplayFix(rawFix, now);
 
     if (el.adsbUpdated){
       var updatedTxt = "Dernière mise à jour : " + (st.lastPollAt ? fmtAge(now - st.lastPollAt) : "—");
@@ -2600,6 +2648,9 @@
         updatedTxt += "  (avion non détecté pour l'instant — source : " + (DATA_ENDPOINT_NAMES[state.workingEndpointIndex || 0] || "?") + ")";
       } else if (st.lastFetchOk === true && st.lastMatchFound === true){
         updatedTxt += "  (source : " + (DATA_ENDPOINT_NAMES[state.workingEndpointIndex || 0] || "?") + ")";
+      }
+      if (fix && fix.extrapolated){
+        updatedTxt += "  · position/alt. estimées (+" + Math.round((now - fix.receivedAt) / 1000) + " s)";
       }
       el.adsbUpdated.textContent = updatedTxt;
     }
@@ -2666,13 +2717,17 @@
     var now = Date.now();
     AIRCRAFTS.forEach(function(def){
       var st = state.aircrafts[def.id];
-      var fix = st.lastFix;
-      if (fix){
-        var status = computeStatus(fix, now);
+      var rawFix = st.lastFix;
+      if (rawFix){
+        // Le statut (en vol / au sol / etc.) se base toujours sur le dernier fix RÉEL, jamais sur une
+        // position extrapolée. Le jalon de distance, lui, utilise la position affichée (extrapolée si
+        // pertinente) pour se déclencher au bon moment plutôt qu'avec jusqu'à 15 s de retard.
+        var status = computeStatus(rawFix, now);
         handleStatusTransition(def, st, status);
         if (status.code === "ok" || status.code === "warn"){
-          var distMetz = haversineKm(fix.lat, fix.lon, METZ.lat, METZ.lon);
-          var brg = bearingDeg(METZ.lat, METZ.lon, fix.lat, fix.lon);
+          var dispFix = getDisplayFix(rawFix, now);
+          var distMetz = haversineKm(dispFix.lat, dispFix.lon, METZ.lat, METZ.lon);
+          var brg = bearingDeg(METZ.lat, METZ.lon, dispFix.lat, dispFix.lon);
           checkDistanceMilestone(def, st, distMetz, compassPoint(brg));
         }
       }
