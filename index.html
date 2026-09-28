@@ -397,6 +397,14 @@
     display: block;
     background: #000;
   }
+  #faceRecoOverlay{
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 3;
+  }
   .live-status{
     position: absolute;
     inset: 0;
@@ -1122,6 +1130,7 @@
       </div>
       <div class="live-video-wrap">
         <video id="liveVideo" playsinline muted></video>
+        <canvas id="faceRecoOverlay"></canvas>
         <audio id="liveAudio" style="display:none"></audio>
         <div class="live-status" id="liveStatus">CONNEXION AU DIRECT&hellip;</div>
       </div>
@@ -3051,6 +3060,42 @@
   var btn = document.getElementById("faceRecoBtn");
   var resultEl = document.getElementById("faceRecoResult");
   var fileInput = document.getElementById("faceRecoFileInput");
+  var overlay = document.getElementById("faceRecoOverlay");
+
+  function clearOverlay(){
+    if (!overlay) return;
+    var ctx = overlay.getContext("2d");
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+  }
+
+  // Dessine un rectangle par visage détecté : vert si ça correspond à la référence (pape),
+  // rouge sinon. Les coordonnées de détection sont dans le référentiel du canvas d'analyse
+  // (résolution native de la vidéo) ; on redimensionne le canvas overlay à cette même
+  // résolution puis on le laisse s'afficher à la taille CSS de la vidéo (width/height:100%).
+  function drawDetections(detections, matches){
+    if (!overlay || !video || !video.videoWidth) return;
+    if (overlay.width !== video.videoWidth) overlay.width = video.videoWidth;
+    if (overlay.height !== video.videoHeight) overlay.height = video.videoHeight;
+    var ctx = overlay.getContext("2d");
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    detections.forEach(function(d, i){
+      var box = d.detection ? d.detection.box : d.box;
+      if (!box) return;
+      var isPope = matches && matches[i] && matches[i].label === REFERENCE_LABEL;
+      var color = isPope ? "#35d976" : "#ff4d4f";
+      ctx.lineWidth = Math.max(2, overlay.width / 240);
+      ctx.strokeStyle = color;
+      ctx.strokeRect(box.x, box.y, box.width, box.height);
+      var label = isPope ? "PAPE (" + matches[i].distance.toFixed(2) + ")" : "?";
+      var fontSize = Math.max(12, Math.round(overlay.width / 60));
+      ctx.font = "bold " + fontSize + "px sans-serif";
+      var textW = ctx.measureText(label).width;
+      ctx.fillStyle = color;
+      ctx.fillRect(box.x, Math.max(0, box.y - fontSize - 4), textW + 8, fontSize + 4);
+      ctx.fillStyle = "#0a0a0a";
+      ctx.fillText(label, box.x + 4, Math.max(fontSize, box.y - 4));
+    });
+  }
 
   var scanTimer = null;
   var running = false;
@@ -3221,16 +3266,19 @@
         .then(function(detections){
           if (!running) return; // désactivé entre-temps
           if (!detections.length){
+            clearOverlay();
             setResult("Aucun visage détecté à l'écran pour le moment.", null);
             return;
           }
           if (!faceMatcher){
+            drawDetections(detections, null);
             setResult(detections.length + " visage(s) détecté(s), mais aucune photo de référence n'est chargée — ajoutez-en via le bouton \u{1F4F7}.", "warn");
             return;
           }
+          var matches = detections.map(function(d){ return faceMatcher.findBestMatch(d.descriptor); });
+          drawDetections(detections, matches);
           var best = null;
-          detections.forEach(function(d){
-            var match = faceMatcher.findBestMatch(d.descriptor);
+          matches.forEach(function(match){
             if (!best || match.distance < best.distance) best = match;
           });
           if (best.label === REFERENCE_LABEL){
@@ -3269,6 +3317,7 @@
     running = false;
     if (scanTimer){ clearInterval(scanTimer); scanTimer = null; }
     if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : activer";
+    clearOverlay();
     setResult("Désactivée. Best-effort, jamais fiable à 100% — à ne jamais utiliser pour une décision opérationnelle.", null);
   }
 
