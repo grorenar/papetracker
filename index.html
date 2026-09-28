@@ -515,6 +515,11 @@
   @media (max-width: 720px){
     .adsb-body{ grid-template-columns: 1fr; }
   }
+  .adsb-head-right{ margin-left: auto; display: flex; align-items: center; gap: 6px; flex: none; }
+  .adsb-card.collapsed .adsb-status-row,
+  .adsb-card.collapsed .adsb-body,
+  .adsb-card.collapsed .adsb-foot{ display: none; }
+  .adsb-card.collapsed .live-collapse-btn{ transform: rotate(180deg); }
   .adsb-data{
     padding: 10px 12px;
     display: grid;
@@ -853,6 +858,56 @@
     justify-content: center;
   }
   .modal-backdrop.open{ display: flex; }
+
+  /* ---------- alertes (toasts) ---------- */
+  .toast-stack{
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: min(360px, calc(100vw - 28px));
+  }
+  .toast{
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent-ok);
+    border-radius: 4px;
+    padding: 9px 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+    animation: toast-in .2s ease-out;
+  }
+  .toast.warn{ border-left-color: var(--accent-warn); }
+  .toast.ground{ border-left-color: var(--focus); }
+  .toast.schedule{ border-left-color: var(--muted); }
+  .toast-title{
+    font-family: 'Oswald', sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+  .toast-body{ font-size: 11px; color: var(--muted); line-height: 1.4; }
+  @keyframes toast-in{ from{ opacity: 0; transform: translateY(-6px); } to{ opacity: 1; transform: translateY(0); } }
+  .toast.leaving{ animation: toast-out .25s ease-in forwards; }
+  @keyframes toast-out{ from{ opacity: 1; } to{ opacity: 0; transform: translateX(20px); } }
+
+  .notif-btn{
+    flex: none;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    padding: 5px 9px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .notif-btn:hover{ border-color: var(--accent-ok); color: var(--accent-ok); }
+  .notif-btn.on{ border-color: var(--accent-ok); color: var(--accent-ok); background: rgba(53,217,118,0.08); }
   .modal-box{
     width: min(94vw, 1200px);
     max-height: 92vh;
@@ -922,6 +977,8 @@
 </style>
 </head>
 <body>
+
+  <div class="toast-stack" id="toastStack"></div>
 
   <div class="topbar">
     <div class="brand">
@@ -1055,6 +1112,10 @@
         <span class="adsb-badge" id="adsbBadge"><span class="dot"></span>ADS-B</span>
         <span class="live-name" id="adsbTitle">SUIVI ADS-B &mdash; F-GTAU</span>
         <span class="live-sub" id="adsbSub">Airbus A321-212 &middot; Air France</span>
+        <div class="adsb-head-right">
+          <button class="notif-btn" id="adsbNotifBtn" title="Activer les notifications (décollage, atterrissage, paliers de 50 km, programme)">&#128276; Alertes</button>
+          <button class="live-collapse-btn" id="adsbCollapseBtn" title="Réduire">&#9650;</button>
+        </div>
       </div>
       <div class="adsb-status-row">
         <span class="adsb-status" id="adsbStatus">&#9898; DONNÉES ADS-B INDISPONIBLES</span>
@@ -1085,7 +1146,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; <strong>build ADS-B rev.11</strong></span>
+        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; <strong>build ADS-B rev.12</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -1110,6 +1171,76 @@
     </div>
   </div>
 
+<script>
+// ------------------------------------------------------------------
+// Utilitaire global d'alertes (toasts + notifications navigateur).
+// Isolé dans sa propre IIFE : indépendant des modules caméras/ADS-B,
+// pour que ni l'un ni l'autre ne puisse casser les alertes ou en dépendre.
+// ------------------------------------------------------------------
+(function(){
+  "use strict";
+
+  var stack = document.getElementById("toastStack");
+
+  function notifPermissionGranted(){
+    return (typeof Notification !== "undefined") && Notification.permission === "granted";
+  }
+
+  function samuNotify(kind, title, body){
+    try {
+      if (stack){
+        var toast = document.createElement("div");
+        toast.className = "toast" + (kind ? " " + kind : "");
+        toast.innerHTML =
+          '<div class="toast-title">' + title + '</div>' +
+          (body ? '<div class="toast-body">' + body + '</div>' : "");
+        stack.appendChild(toast);
+        setTimeout(function(){
+          toast.classList.add("leaving");
+          setTimeout(function(){ if (toast.parentNode) toast.parentNode.removeChild(toast); }, 300);
+        }, 8000);
+      }
+    } catch (err) {}
+
+    try {
+      if (notifPermissionGranted()){
+        new Notification(title, { body: body || "", tag: "samu57-" + kind + "-" + Date.now() });
+      }
+    } catch (err) {}
+  }
+
+  function requestNotifPermission(btn){
+    if (typeof Notification === "undefined"){
+      samuNotify("warn", "Notifications indisponibles", "Ce navigateur ne supporte pas les notifications.");
+      return;
+    }
+    if (Notification.permission === "granted"){
+      if (btn) btn.classList.add("on");
+      samuNotify("ok", "Notifications déjà actives", "Vous recevrez les alertes ADS-B et programme.");
+      return;
+    }
+    Notification.requestPermission().then(function(perm){
+      if (btn) btn.classList.toggle("on", perm === "granted");
+      if (perm === "granted"){
+        samuNotify("ok", "Notifications activées", "Décollage, atterrissage, paliers de 50 km et étapes du programme.");
+      }
+    }).catch(function(){});
+  }
+
+  window.samuNotify = samuNotify;
+  window.samuRequestNotifPermission = requestNotifPermission;
+
+  document.addEventListener("DOMContentLoaded", function(){
+    try {
+      var btns = document.querySelectorAll(".notif-btn");
+      btns.forEach(function(btn){
+        if (notifPermissionGranted()) btn.classList.add("on");
+        btn.addEventListener("click", function(){ requestNotifPermission(btn); });
+      });
+    } catch (err) {}
+  });
+})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.15/hls.min.js"></script>
 <script>
 (function(){
@@ -1439,11 +1570,15 @@
     return { date: d, li: li, statusEl: li.querySelector(".t-status") };
   });
 
+  var scheduleNotifyFirstRun = true;
+  var scheduleLastNowIndex = -1;
+
   function updateSchedule(now){
     var nextIndex = -1;
     for (var i = 0; i < scheduleItems.length; i++){
       if (scheduleItems[i].date > now){ nextIndex = i; break; }
     }
+    var nowIndex = (nextIndex === -1) ? (scheduleItems.length - 1) : (nextIndex > 0 ? nextIndex - 1 : -1);
     scheduleItems.forEach(function(item, i){
       item.li.classList.remove("done", "now", "next");
       if (nextIndex === -1){
@@ -1464,6 +1599,19 @@
         item.statusEl.textContent = "";
       }
     });
+
+    // Alerte programme : on notifie uniquement le passage à "EN COURS" d'une nouvelle étape,
+    // jamais au premier chargement de la page (pour ne pas ré-annoncer tout ce qui est déjà passé).
+    if (scheduleNotifyFirstRun){
+      scheduleNotifyFirstRun = false;
+      scheduleLastNowIndex = nowIndex;
+    } else if (nowIndex !== -1 && nowIndex > scheduleLastNowIndex){
+      var startedItem = SCHEDULE[nowIndex];
+      if (startedItem && window.samuNotify){
+        try { window.samuNotify("schedule", "Programme — étape en cours", startedItem.label); } catch (err) {}
+      }
+      scheduleLastNowIndex = nowIndex;
+    }
   }
 
   // ---------------- circulation & accès ----------------
@@ -1899,13 +2047,17 @@
     userMovedMap: false,
     pollTimer: null,
     pollDelay: POLL_MS,
-    consecutiveErrors: 0
+    consecutiveErrors: 0,
+    prevStatusCode: null,      // pour détecter les transitions (décollage / atterrissage)
+    autoCollapsedOnce: false,  // ne rabat automatiquement qu'une seule fois à l'atterrissage
+    notifiedDistanceBucket: null // dernier palier de 50 km déjà notifié (ex : 150 pour "passage sous 150 km")
   };
 
   // Les clés de stockage sont propres à l'avion suivi (icao24) : passer en mode test puis revenir à
   // F-GTAU (ou l'inverse) ne doit jamais réafficher la position d'un autre appareil.
   var STORAGE_KEY_FIX = "samu57_adsb_lastfix_" + AIRCRAFT.icao24;
   var STORAGE_KEY_TRAIL = "samu57_adsb_trail_" + AIRCRAFT.icao24;
+  var STORAGE_KEY_COLLAPSED = "samu57_adsb_collapsed";
 
   try {
     var savedTrail = JSON.parse(localStorage.getItem(STORAGE_KEY_TRAIL) || "null");
@@ -1916,7 +2068,7 @@
 
   // ---------------- DOM refs ----------------
   var el = {};
-  ["adsbBadge","adsbStatus","adsbUpdated","adsbTitle","adsbSub","fRegistration","fIcao","fCallsign","fCategory",
+  ["adsbCard","adsbCollapseBtn","adsbBadge","adsbStatus","adsbUpdated","adsbTitle","adsbSub","fRegistration","fIcao","fCallsign","fCategory",
    "fAltitude","fSpeed","fHeading","fVrate","fLat","fLon","fSquawk","fAge","fDistMetz",
    "fDistEtz","fEta","adsbMap","adsbMapMsg","adsbRecenterBtn"].forEach(function(id){
     el[id] = document.getElementById(id);
@@ -2013,6 +2165,45 @@
     return { code: "warn", label: "&#128992; STATUT INCERTAIN" };
   }
 
+  // ---------------- alertes (décollage / atterrissage / paliers de distance) ----------------
+  function setCollapsed(collapsed){
+    if (!el.adsbCard) return;
+    el.adsbCard.classList.toggle("collapsed", !!collapsed);
+    if (el.adsbCollapseBtn) el.adsbCollapseBtn.title = collapsed ? "Afficher" : "Réduire";
+    try { localStorage.setItem(STORAGE_KEY_COLLAPSED, collapsed ? "1" : "0"); } catch (err) {}
+  }
+
+  function handleStatusTransition(status){
+    var prev = state.prevStatusCode;
+    if (prev !== null && prev !== status.code){
+      if (status.code === "ok" && prev === "ground"){
+        safe(function(){ window.samuNotify("ok", "✈️ Décollage détecté", (AIRCRAFT.registration || "L'avion") + " vient de décoller."); });
+      } else if (status.code === "ground" && prev === "ok"){
+        safe(function(){ window.samuNotify("ground", "🛬 Atterrissage détecté", (AIRCRAFT.registration || "L'avion") + " s'est posé."); });
+        if (!state.autoCollapsedOnce){
+          state.autoCollapsedOnce = true;
+          setCollapsed(true);
+        }
+      }
+    }
+    state.prevStatusCode = status.code;
+  }
+
+  function checkDistanceMilestone(distMetz, compassLabel){
+    var bucket = Math.floor(distMetz / 50) * 50;
+    if (state.notifiedDistanceBucket === null){
+      state.notifiedDistanceBucket = bucket;
+      return;
+    }
+    if (bucket !== state.notifiedDistanceBucket){
+      safe(function(){
+        window.samuNotify("ok", "Palier " + bucket + " km de Metz",
+          (AIRCRAFT.registration || "L'avion") + " est à environ " + Math.round(distMetz) + " km de Metz (" + compassLabel + ").");
+      });
+      state.notifiedDistanceBucket = bucket;
+    }
+  }
+
   // ---------------- carte MapLibre GL JS ----------------
   var PLANE_SVG =
     '<svg viewBox="0 0 24 24" width="30" height="30" xmlns="http://www.w3.org/2000/svg">' +
@@ -2100,21 +2291,21 @@
     img.src = url + (url.indexOf("?") >= 0 ? "&" : "?") + "_probe=" + Date.now();
   }
 
+  // Essai dans l'ordre strict (et non en parallèle) : Esri Dark Gray Canvas est le fond de carte voulu
+  // par défaut, il ne doit être remplacé que s'il échoue réellement — jamais juste parce qu'un autre
+  // fournisseur a répondu quelques millisecondes plus vite lors d'une course en parallèle.
   function findWorkingTileSource(cb){
-    var doneCount = 0;
-    var settled = false;
-    TILE_CANDIDATES.forEach(function(candidate){
+    var idx = 0;
+    function tryNext(){
+      if (idx >= TILE_CANDIDATES.length){ cb(null); return; }
+      var candidate = TILE_CANDIDATES[idx];
       probeTile(candidate, function(ok){
-        doneCount++;
-        if (ok && !settled){
-          settled = true;
-          cb(candidate);
-        } else if (!ok && doneCount === TILE_CANDIDATES.length && !settled){
-          settled = true;
-          cb(null);
-        }
+        if (ok){ cb(candidate); return; }
+        idx++;
+        tryNext();
       });
-    });
+    }
+    tryNext();
   }
 
   function createMap(tileSource){
@@ -2288,6 +2479,7 @@
     var fix = state.lastFix;
     var status = computeStatus(fix, now);
     applyBadge(status.code === "ok" ? "ok" : (status.code === "ground" ? "ground" : (status.code === "warn" ? "warn" : "off")), status.label);
+    if (fix) handleStatusTransition(status);
 
     if (el.adsbUpdated){
       var updatedTxt = "Dernière mise à jour : " + (state.lastPollAt ? fmtAge(now - state.lastPollAt) : "—");
@@ -2336,9 +2528,12 @@
 
     var distMetz = haversineKm(fix.lat, fix.lon, METZ.lat, METZ.lon);
     var distEtz = haversineKm(fix.lat, fix.lon, ETZ.lat, ETZ.lon);
-    var brg = bearingDeg(fix.lat, fix.lon, METZ.lat, METZ.lon);
+    // Direction DE Metz VERS l'avion (et non l'inverse) : c'est ce qui permet de dire correctement
+    // "l'avion est au [X] de Metz" plutôt que "cap à suivre depuis l'avion pour rejoindre Metz".
+    var brg = bearingDeg(METZ.lat, METZ.lon, fix.lat, fix.lon);
     setField("fDistMetz", fmtNum(Math.round(distMetz)) + " km (" + compassPoint(brg) + " de Metz)");
     setField("fDistEtz", fmtNum(Math.round(distEtz)) + " km");
+    if (status.code === "ok" || status.code === "warn") checkDistanceMilestone(distMetz, compassPoint(brg));
 
     if (status.code === "ok" && fix.velocity && fix.velocity > 3 && fix.onGround === false){
       var etaMin = (distEtz / (fix.velocity * 1.852)) * 60;
@@ -2443,6 +2638,22 @@
       if (el.adsbTitle) el.adsbTitle.innerHTML = "SUIVI ADS-B &mdash; MODE TEST (" + AIRCRAFT.registration + ")";
       if (el.adsbSub) el.adsbSub.textContent = "ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
     }
+    if (el.adsbCollapseBtn){
+      el.adsbCollapseBtn.addEventListener("click", function(){
+        var isCollapsed = el.adsbCard && el.adsbCard.classList.contains("collapsed");
+        setCollapsed(!isCollapsed);
+      });
+    }
+    try {
+      if (localStorage.getItem(STORAGE_KEY_COLLAPSED) === "1"){
+        // Ne restaure un état "réduit" que si l'avion était déjà posé lors de la dernière session
+        // connue : on ne veut jamais masquer le module par défaut au premier chargement.
+        if (state.lastFix && state.lastFix.onGround === true){
+          state.autoCollapsedOnce = true;
+          setCollapsed(true);
+        }
+      }
+    } catch (err) {}
     initMap();
     render();
     if (!navigator.onLine){
