@@ -3046,14 +3046,14 @@
   // visage détectable, ou dont le fichier a été renommé sur Commons est simplement ignorée (avec un
   // avertissement en console) plutôt que de faire échouer toute l'initialisation — plus la liste est
   // grande, plus la reconnaissance devient robuste aux différents angles/éclairages/expressions.
-  var MATCH_DISTANCE_THRESHOLD = 0.6; // seuil par défaut recommandé par face-api.js
+  var MATCH_DISTANCE_THRESHOLD = 0.8; // seuil par défaut recommandé par face-api.js
   var SCAN_INTERVAL_MS = 500;
   // Le flux KTO montre souvent des visages petits/lointains (plan large sur la foule/l'estrade).
   // On monte la résolution d'analyse (par défaut 416) et on baisse le seuil de confiance (par
   // défaut 0.5) pour le scan en direct uniquement, afin de repérer davantage de petits visages,
   // au prix d'un peu plus de calcul par frame et de plus de détections incertaines.
   function makeLiveScanDetectorOptions(){
-    return new faceapi.TinyFaceDetectorOptions({ inputSize: 832, scoreThreshold: 0.3 });
+    return new faceapi.TinyFaceDetectorOptions({ inputSize: 832, scoreThreshold: 0.5 });
   }
 
   var video = document.getElementById("liveVideo");
