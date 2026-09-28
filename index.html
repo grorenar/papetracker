@@ -1174,7 +1174,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 2 vols &mdash; <strong>build ADS-B rev.18</strong></span>
+        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 2 vols &mdash; <strong>build ADS-B rev.19</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -2232,14 +2232,20 @@
     }
     var distKm = fix.velocity * 1.852 * (age / 3600000); // noeuds -> km/h, puis distance parcourue
     var dest = destinationPoint(fix.lat, fix.lon, fix.track, distKm);
+    // Garde-fou : si les données sources contiennent une valeur aberrante (vitesse/cap corrompus), le
+    // calcul peut produire NaN. Dans ce cas on renvoie le fix réel tel quel plutôt qu'une position
+    // invalide qui ferait planter la carte (MapLibre rejette un LngLat non fini) et bloquerait la mise
+    // à jour de TOUS les avions suivants dans la même boucle.
+    if (!isFinite(dest.lat) || !isFinite(dest.lon)) return fix;
+    var extrapolatedAltBaro = (typeof fix.altBaro === "number" && typeof fix.vrate === "number")
+      ? fix.altBaro + fix.vrate * (age / 60000) // ft/min -> ft parcourus
+      : fix.altBaro;
     return {
       icao24: fix.icao24, callsign: fix.callsign, registration: fix.registration, typeCode: fix.typeCode,
       onGround: fix.onGround, velocity: fix.velocity, track: fix.track, vrate: fix.vrate,
       altGeo: fix.altGeo, squawk: fix.squawk, category: fix.category, receivedAt: fix.receivedAt,
       lat: dest.lat, lon: dest.lon,
-      altBaro: (typeof fix.altBaro === "number" && typeof fix.vrate === "number")
-        ? fix.altBaro + fix.vrate * (age / 60000) // ft/min -> ft parcourus
-        : fix.altBaro,
+      altBaro: isFinite(extrapolatedAltBaro) ? extrapolatedAltBaro : fix.altBaro,
       extrapolated: true
     };
   }
@@ -2595,9 +2601,17 @@
 
     var trailSource = map.getSource(trailSourceId(def.id));
     if (trailSource){
+      var coords = st.trail.map(function(p){ return [p.lon, p.lat]; });
+      // Le trait affiché inclut la position COURANTE (extrapolée si on est entre deux sondages), sans
+      // jamais l'ajouter au tableau st.trail persisté : sinon la ligne resterait figée sur le dernier
+      // point réel jusqu'au prochain fix, alors que le marqueur, lui, avance déjà.
+      var lastReal = coords.length ? coords[coords.length - 1] : null;
+      if (!lastReal || lastReal[0] !== lngLat[0] || lastReal[1] !== lngLat[1]){
+        coords = coords.concat([lngLat]);
+      }
       trailSource.setData({
         type: "Feature",
-        geometry: { type: "LineString", coordinates: st.trail.map(function(p){ return [p.lon, p.lat]; }) }
+        geometry: { type: "LineString", coordinates: coords }
       });
     }
 
@@ -2716,24 +2730,29 @@
   function renderAll(){
     var now = Date.now();
     AIRCRAFTS.forEach(function(def){
-      var st = state.aircrafts[def.id];
-      var rawFix = st.lastFix;
-      if (rawFix){
-        // Le statut (en vol / au sol / etc.) se base toujours sur le dernier fix RÉEL, jamais sur une
-        // position extrapolée. Le jalon de distance, lui, utilise la position affichée (extrapolée si
-        // pertinente) pour se déclencher au bon moment plutôt qu'avec jusqu'à 15 s de retard.
-        var status = computeStatus(rawFix, now);
-        handleStatusTransition(def, st, status);
-        if (status.code === "ok" || status.code === "warn"){
-          var dispFix = getDisplayFix(rawFix, now);
-          var distMetz = haversineKm(dispFix.lat, dispFix.lon, METZ.lat, METZ.lon);
-          var brg = bearingDeg(METZ.lat, METZ.lon, dispFix.lat, dispFix.lon);
-          checkDistanceMilestone(def, st, distMetz, compassPoint(brg));
+      // Chaque avion est traité dans son propre safe() : une erreur (donnée aberrante, calcul
+      // invalide...) sur l'un ne doit jamais interrompre la mise à jour des suivants dans cette même
+      // boucle — sans quoi un avion pourrait "geler" silencieusement pendant que l'autre continue.
+      safe(function(){
+        var st = state.aircrafts[def.id];
+        var rawFix = st.lastFix;
+        if (rawFix){
+          // Le statut (en vol / au sol / etc.) se base toujours sur le dernier fix RÉEL, jamais sur une
+          // position extrapolée. Le jalon de distance, lui, utilise la position affichée (extrapolée si
+          // pertinente) pour se déclencher au bon moment plutôt qu'avec jusqu'à 15 s de retard.
+          var status = computeStatus(rawFix, now);
+          handleStatusTransition(def, st, status);
+          if (status.code === "ok" || status.code === "warn"){
+            var dispFix = getDisplayFix(rawFix, now);
+            var distMetz = haversineKm(dispFix.lat, dispFix.lon, METZ.lat, METZ.lon);
+            var brg = bearingDeg(METZ.lat, METZ.lon, dispFix.lat, dispFix.lon);
+            checkDistanceMilestone(def, st, distMetz, compassPoint(brg));
+          }
         }
-      }
-      updateMapMarker(def, st, now);
+        updateMapMarker(def, st, now);
+      });
     });
-    renderSelectedPanel();
+    safe(renderSelectedPanel);
   }
 
   // ---------------- appel API ----------------
