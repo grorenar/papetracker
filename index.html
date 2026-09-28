@@ -1174,7 +1174,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 2 vols &mdash; <strong>build ADS-B rev.19</strong></span>
+        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 2 vols &mdash; <strong>build ADS-B rev.20</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -2163,7 +2163,12 @@
   });
 
   function safe(fn){
-    try { fn(); } catch (err) { /* le module ADS-B ne doit jamais casser le reste de la page */ }
+    try { fn(); } catch (err) {
+      // Le module ADS-B ne doit jamais casser le reste de la page, mais une erreur avalée en silence
+      // est impossible à diagnostiquer : on la journalise (visible dans la console navigateur, F12)
+      // sans jamais la laisser remonter.
+      try { console.warn("[ADS-B] erreur interceptée : " + (err && err.stack ? err.stack : err)); } catch (logErr) {}
+    }
   }
 
   // ---------------- utilitaires géo ----------------
