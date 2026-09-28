@@ -1085,7 +1085,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol (accès public, communautaire) &mdash; <strong>build ADS-B rev.10</strong></span>
+        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; <strong>build ADS-B rev.11</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -1800,13 +1800,22 @@
   // on passe par des proxys CORS publics, essayés dans l'ordre jusqu'à ce que l'un fonctionne — tout
   // reste dans ce seul fichier HTML, sans backend à maintenir.
   var ADSB_TARGET_BASE = "https://api.adsb.lol/v2/icao/";
-  // Diagnostic effectué en conditions réelles (console navigateur) :
-  // - adsb.lol : blocage CORS confirmé et permanent (le serveur ne renvoie jamais l'en-tête requis).
+  // Diagnostic effectué en conditions réelles (console navigateur + tests directs) :
+  // - adsb.lol en appel direct : blocage CORS confirmé et permanent (pas d'en-tête CORS renvoyé).
+  // - Un proxy Cloudflare Worker dédié se fait lui-même bloquer par adsb.lol (429 Too Many Requests) —
+  //   les adresses de sortie de Cloudflare Workers sont massivement partagées et visiblement déjà
+  //   saturées côté adsb.lol, indépendamment de notre propre volume de requêtes.
+  // - Un relais équivalent sur Deno Deploy (adresses de sortie différentes) fonctionne de façon fiable :
+  //   il devient donc la source prioritaire.
   // - thingproxy.freeboard.io : domaine mort (ERR_NAME_NOT_RESOLVED), service arrêté — retiré.
-  // - allorigins.win : son endpoint "/raw" ne pose pas l'en-tête CORS de façon fiable ; son endpoint
-  //   "/get" le fait, mais renvoie la réponse encapsulée dans un champ JSON "contents" à déballer.
-  // - corsproxy.io reste tenté en dernier recours (service parfois instable, mais gratuit).
+  // - allorigins.win / codetabs.com / corsproxy.io restent en repli si jamais le relais Deno tombe.
+  var DENO_PROXY_BASE = "https://solid-lamprey-1841.grorenar.deno.net/?icao24=";
   var DATA_ENDPOINTS = [
+    {
+      name: "relais Deno (dédié)",
+      url: function(icao){ return DENO_PROXY_BASE + icao; },
+      unwrap: function(text){ return text; }
+    },
     {
       name: "direct adsb.lol",
       url: function(icao){ return ADSB_TARGET_BASE + icao; },
