@@ -1132,6 +1132,10 @@
         <button class="btn" id="liveResyncBtn" title="Si le son prend du retard sur l'image">&#8635; Resynchroniser</button>
         <span class="live-foot-note">Image et son sont deux flux distincts (le direct KTO les diffuse séparément) &mdash; un léger décalage est possible.</span>
       </div>
+      <div class="live-foot" style="border-top:1px dashed var(--border);">
+        <button class="btn" id="canvasTestBtn" title="Vérifie si le flux vidéo autorise la lecture pixel par pixel (préalable à toute reconnaissance faciale)">&#129514; Tester capture d'image (préalable reconnaissance faciale)</button>
+        <span class="live-foot-note" id="canvasTestResult">Test non lancé.</span>
+      </div>
     </div>
 
     <div class="adsb-card" id="adsbCard">
@@ -2916,6 +2920,75 @@
     startClockTick();
   });
 
+})();
+</script>
+
+<script>
+// ------------------------------------------------------------------
+// Test isolé : le flux vidéo KTO autorise-t-il la lecture pixel par pixel d'un canvas ?
+// C'est le préalable technique à toute reconnaissance faciale côté navigateur (OpenCV.js,
+// face-api.js...) : si le flux est diffusé sans en-têtes CORS adaptés, le navigateur "tache"
+// (taint) le canvas dès qu'on y dessine une frame vidéo, et interdit ensuite toute lecture des
+// pixels (getImageData / toDataURL lèvent une SecurityError). Ce module ne touche à rien d'autre
+// sur la page : il se contente d'observer la vidéo déjà chargée par le module KTO et d'afficher
+// un verdict clair, sans jamais pouvoir casser le reste du direct si le test échoue.
+// ------------------------------------------------------------------
+(function(){
+  "use strict";
+
+  var video = document.getElementById("liveVideo");
+  var btn = document.getElementById("canvasTestBtn");
+  var resultEl = document.getElementById("canvasTestResult");
+
+  function setResult(text, ok){
+    if (!resultEl) return;
+    resultEl.textContent = text;
+    resultEl.style.color = (ok === true) ? "var(--accent-ok)" : (ok === false) ? "var(--accent-warn)" : "";
+  }
+
+  function runTest(){
+    if (!video){
+      setResult("Test impossible : lecteur vidéo introuvable.", false);
+      return;
+    }
+    if (video.readyState < 2 || !video.videoWidth){
+      setResult("Le direct n'a pas encore de première image décodée — relance le test dans quelques secondes.", null);
+      return;
+    }
+    try {
+      var canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      var ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // La lecture des pixels (pas juste le dessin) est ce qui déclenche l'erreur si le canvas est
+      // "taché" : drawImage seul ne suffit pas à détecter le blocage.
+      var pixel = ctx.getImageData(0, 0, 1, 1); // lève une SecurityError si le canvas est taché
+      var dataUrl = canvas.toDataURL(); // deuxième vérification, par une voie différente
+
+      setResult(
+        "✅ Capture autorisée (" + canvas.width + "×" + canvas.height + ", pixel test = [" +
+        Array.prototype.join.call(pixel.data, ",") + "]) — la reconnaissance faciale côté navigateur est envisageable.",
+        true
+      );
+      try { console.log("[Test canvas KTO] OK — lecture pixel autorisée. Aperçu dataURL (100 premiers caractères) :", dataUrl.slice(0, 100)); } catch (e) {}
+    } catch (err) {
+      var isSecurityError = err && (err.name === "SecurityError" || /tainted|cross-origin/i.test(err.message || ""));
+      setResult(
+        "❌ Capture bloquée par le navigateur (" + (err && err.name ? err.name : "erreur") + (isSecurityError ? " — canvas \"taché\" (CORS) : le flux KTO ne fournit pas les en-têtes nécessaires" : "") + "). La reconnaissance faciale sur ce flux n'est pas réalisable côté navigateur sans un relais qui ajoute ces en-têtes.",
+        false
+      );
+      try { console.warn("[Test canvas KTO] Échec : " + (err && err.stack ? err.stack : err)); } catch (e) {}
+    }
+  }
+
+  if (btn) btn.addEventListener("click", runTest);
+
+  // Un essai automatique dès que la vidéo a une première image, pour avoir un verdict même sans clic.
+  if (video){
+    video.addEventListener("loadeddata", function(){ setTimeout(runTest, 500); }, { once: true });
+  }
 })();
 </script>
 </body>
