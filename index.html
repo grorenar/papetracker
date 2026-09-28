@@ -577,6 +577,33 @@
   .adsb-recenter-btn:hover{ border-color: var(--accent-ok); color: var(--accent-ok); }
   .adsb-plane-icon{ transform-origin: 50% 50%; filter: drop-shadow(0 0 2px rgba(0,0,0,0.8)); }
   .adsb-plane-icon.on-ground{ opacity: 0.75; }
+  .adsb-plane-icon.pope{ filter: drop-shadow(0 0 5px rgba(255,179,64,0.85)) drop-shadow(0 0 2px rgba(0,0,0,0.8)); }
+  .adsb-tabs{
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .adsb-card.collapsed .adsb-tabs{ display: none; }
+  .adsb-tab{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.03em;
+    padding: 5px 9px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .adsb-tab:hover{ border-color: var(--accent-ok); color: var(--text); }
+  .adsb-tab.active{ border-color: var(--accent-ok); color: var(--text); background: rgba(53,217,118,0.1); }
+  .adsb-tab-dot{ width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 4px currentColor; }
   .maplibregl-popup-content{ background: var(--panel); color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 11px; }
   .maplibregl-popup-tip{ border-top-color: var(--panel); border-bottom-color: var(--panel); }
   .adsb-airport-dot{
@@ -1117,6 +1144,7 @@
           <button class="live-collapse-btn" id="adsbCollapseBtn" title="Réduire">&#9650;</button>
         </div>
       </div>
+      <div class="adsb-tabs" id="adsbTabs"></div>
       <div class="adsb-status-row">
         <span class="adsb-status" id="adsbStatus">&#9898; DONNÉES ADS-B INDISPONIBLES</span>
         <span class="adsb-updated" id="adsbUpdated">Dernière mise à jour : &mdash;</span>
@@ -1146,7 +1174,7 @@
         </div>
       </div>
       <div class="adsb-foot">
-        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; <strong>build ADS-B rev.12</strong></span>
+        <span>Source : ADS-B / adsb.lol via relais Deno (accès public) &mdash; suivi simultané de 3 vols &mdash; <strong>build ADS-B rev.13</strong></span>
         <span class="adsb-foot-note">Positions et statut à titre indicatif, sans valeur officielle.</span>
       </div>
     </div>
@@ -1900,28 +1928,63 @@
 (function(){
   "use strict";
 
-  // Config de l'avion suivi — modifiable facilement pour changer d'appareil.
-  var AIRCRAFT = {
-    registration: "F-GTAU",
-    icao24: "394c14",
-    type: "Airbus A321-212",
-    operator: "Air France"
-  };
+  // Configuration des avions suivis : celui du pape (ICAO24 connu), un vol logistique (ICAO24 connu),
+  // et un troisième vol dont on ne connaît que l'indicatif (callsign) — l'appareil physique affecté
+  // n'est identifiable qu'une fois qu'il émet réellement ce callsign en ADS-B (au plus tôt au roulage,
+  // au plus tard au décollage, selon la couverture des récepteurs au sol à l'aéroport de départ).
+  var AIRCRAFTS = [
+    {
+      id: "fgtau",
+      isPope: true,
+      registration: "F-GTAU",
+      type: "Airbus A321-212",
+      operator: "Air France &mdash; vol papal",
+      color: "#ffb340",
+      queryType: "icao",
+      icao24: "394c14"
+    },
+    {
+      id: "ent5fh",
+      isPope: false,
+      registration: "ENT5FH",
+      type: "Boeing 737-800",
+      operator: "Enter Air",
+      color: "#57d9ff",
+      queryType: "icao",
+      icao24: "4891ad"
+    },
+    {
+      id: "af400",
+      isPope: false,
+      registration: "AF400 / AF4005",
+      type: "Airbus A321 (probable)",
+      operator: "Air France",
+      color: "#ff6b6b",
+      queryType: "callsign",
+      callsigns: ["AF400", "AF4005"]
+    }
+  ];
+
   var TEST_MODE = false;
 
-  // Mode test : ajouter ?icao24=XXXXXX à l'URL de la page (dans la barre d'adresse) permet de suivre
-  // temporairement n'importe quel autre avion, pour vérifier que le module fonctionne avec un appareil
-  // actuellement en vol. N'affecte jamais le réglage par défaut (F-GTAU) tant que le paramètre est absent.
+  // Mode test : ajouter ?icao24=XXXXXX à l'URL de la page remplace temporairement le premier avion
+  // (celui du pape) par n'importe quel appareil actuellement en vol, pour vérifier que le module
+  // fonctionne. N'affecte jamais le réglage par défaut tant que le paramètre est absent, et n'affecte
+  // jamais les deux autres avions suivis.
   (function applyTestOverride(){
     try {
       var params = new URLSearchParams(window.location.search);
       var testIcao = params.get("icao24");
       if (testIcao && /^[0-9a-fA-F]{6}$/.test(testIcao)){
-        AIRCRAFT = {
+        AIRCRAFTS[0] = {
+          id: "fgtau",
+          isPope: true,
           registration: (params.get("reg") || "TEST").toUpperCase(),
-          icao24: testIcao.toLowerCase(),
           type: "N/A (mode test)",
-          operator: "N/A (mode test)"
+          operator: "N/A (mode test)",
+          color: "#ffb340",
+          queryType: "icao",
+          icao24: testIcao.toLowerCase()
         };
         TEST_MODE = true;
       }
@@ -1943,35 +2006,36 @@
 
   // Source de données : adsb.lol (agrégateur communautaire, gratuit, sans clé, schéma compatible
   // ADS-B Exchange v2). Elle répond correctement en serveur-à-serveur mais ne renvoie pas d'en-tête
-  // CORS pour un appel direct depuis un navigateur (confirmé : ça bloque aussi bien en local qu'une
-  // fois la page hébergée sur un vrai domaine). Plutôt que de dépendre d'un serveur séparé à déployer,
-  // on passe par des proxys CORS publics, essayés dans l'ordre jusqu'à ce que l'un fonctionne — tout
-  // reste dans ce seul fichier HTML, sans backend à maintenir.
-  var ADSB_TARGET_BASE = "https://api.adsb.lol/v2/icao/";
-  // Diagnostic effectué en conditions réelles (console navigateur + tests directs) :
-  // - adsb.lol en appel direct : blocage CORS confirmé et permanent (pas d'en-tête CORS renvoyé).
-  // - Un proxy Cloudflare Worker dédié se fait lui-même bloquer par adsb.lol (429 Too Many Requests) —
-  //   les adresses de sortie de Cloudflare Workers sont massivement partagées et visiblement déjà
-  //   saturées côté adsb.lol, indépendamment de notre propre volume de requêtes.
-  // - Un relais équivalent sur Deno Deploy (adresses de sortie différentes) fonctionne de façon fiable :
-  //   il devient donc la source prioritaire.
-  // - thingproxy.freeboard.io : domaine mort (ERR_NAME_NOT_RESOLVED), service arrêté — retiré.
-  // - allorigins.win / codetabs.com / corsproxy.io restent en repli si jamais le relais Deno tombe.
+  // CORS pour un appel direct depuis un navigateur (confirmé). On passe par un relais dédié (Deno
+  // Deploy) puis, en repli, par des proxys CORS publics génériques — tout reste dans ce seul fichier
+  // HTML, sans backend à maintenir dans le projet.
+  var ADSB_BASE = "https://api.adsb.lol/v2/";
   var DENO_PROXY_BASE = "https://solid-lamprey-1841.grorenar.deno.net/?icao24=";
+
+  // Construit l'URL cible réelle chez adsb.lol selon le type de requête : par ICAO24 (avion identifié
+  // à l'avance) ou par callsign (avion dont on ne connaît que l'indicatif de vol).
+  function buildTargetUrl(target){
+    if (target.type === "callsign") return ADSB_BASE + "callsign/" + encodeURIComponent(target.value);
+    return ADSB_BASE + "icao/" + target.value;
+  }
+
   var DATA_ENDPOINTS = [
     {
+      // Le relais Deno actuellement déployé ne sait interroger adsb.lol que par ICAO24 (?icao24=...).
+      // Pour une requête par callsign, on saute directement ce relais (url renvoie null) et on passe
+      // aux proxys génériques ci-dessous, qui relaient n'importe quelle URL cible.
       name: "relais Deno (dédié)",
-      url: function(icao){ return DENO_PROXY_BASE + icao; },
+      url: function(target){ return (target.type === "icao") ? (DENO_PROXY_BASE + target.value) : null; },
       unwrap: function(text){ return text; }
     },
     {
       name: "direct adsb.lol",
-      url: function(icao){ return ADSB_TARGET_BASE + icao; },
+      url: function(target){ return buildTargetUrl(target); },
       unwrap: function(text){ return text; }
     },
     {
       name: "allorigins.win",
-      url: function(icao){ return "https://api.allorigins.win/get?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+      url: function(target){ return "https://api.allorigins.win/get?url=" + encodeURIComponent(buildTargetUrl(target)); },
       unwrap: function(text){
         var wrapper = JSON.parse(text);
         if (!wrapper || typeof wrapper.contents !== "string") throw new Error("réponse allorigins inattendue");
@@ -1980,20 +2044,21 @@
     },
     {
       name: "codetabs.com",
-      url: function(icao){ return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+      url: function(target){ return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(buildTargetUrl(target)); },
       unwrap: function(text){ return text; }
     },
     {
       name: "corsproxy.io",
-      url: function(icao){ return "https://corsproxy.io/?url=" + encodeURIComponent(ADSB_TARGET_BASE + icao); },
+      url: function(target){ return "https://corsproxy.io/?url=" + encodeURIComponent(buildTargetUrl(target)); },
       unwrap: function(text){ return text; }
     }
   ];
   var DATA_ENDPOINT_NAMES = DATA_ENDPOINTS.map(function(e){ return e.name; });
 
   // Essaie chaque source dans l'ordre (en commençant par la dernière qui a fonctionné) jusqu'au
-  // premier succès ; ne casse jamais l'appelant, remonte toujours (data, err) au callback.
-  function fetchAdsbData(icao, startIndex, onDone){
+  // premier succès ; saute silencieusement une source qui ne sait pas construire l'URL pour ce type
+  // de requête (ex. le relais Deno pour une requête par callsign) ; ne casse jamais l'appelant.
+  function fetchAdsbData(target, startIndex, onDone){
     var idx = startIndex || 0;
 
     function tryNext(){
@@ -2003,11 +2068,15 @@
       }
       var thisIdx = idx;
       var endpoint = DATA_ENDPOINTS[thisIdx];
-      var url = endpoint.url(icao);
+      var url = endpoint.url(target);
+      if (!url){
+        idx++;
+        tryNext();
+        return;
+      }
       var controller = (typeof AbortController !== "undefined") ? new AbortController() : null;
       // Délai généreux : les relais publics (allorigins/codetabs) font eux-mêmes un aller-retour vers
-      // adsb.lol, et un réseau d'entreprise qui inspecte le trafic HTTPS ajoute encore de la latence —
-      // 8 s s'est révélé trop court dans ce contexte et coupait la requête avant sa réponse.
+      // adsb.lol, et un réseau d'entreprise qui inspecte le trafic HTTPS ajoute encore de la latence.
       var timeoutId = controller ? setTimeout(function(){ controller.abort(); }, 15000) : null;
 
       fetch(url, { method: "GET", cache: "no-store", signal: controller ? controller.signal : undefined })
@@ -2027,7 +2096,7 @@
         .catch(function(err){
           // Log volontairement visible (au lieu d'être avalé en silence) pour pouvoir diagnostiquer
           // depuis la console navigateur (F12) laquelle des sources échoue et pourquoi.
-          try { console.warn("[ADS-B] source \"" + endpoint.name + "\" a échoué : " + (err && err.message ? err.message : err)); } catch (logErr) {}
+          try { console.warn("[ADS-B] source \"" + endpoint.name + "\" a échoué (" + target.type + ":" + target.value + ") : " + (err && err.message ? err.message : err)); } catch (logErr) {}
           idx++;
           tryNext();
         });
@@ -2036,39 +2105,63 @@
     tryNext();
   }
 
-  // ---------------- état interne ----------------
+  // ---------------- état interne (un état partagé + un état par avion) ----------------
   var state = {
-    lastFix: null,        // {lat, lon, altBaro, altGeo, onGround, velocity, track, vrate, callsign, squawk, category, lastContact, timePosition, receivedAt}
-    trail: [],
     map: null,
-    marker: null,
-    polyline: null,
-    metzMarker: null,
     userMovedMap: false,
-    pollTimer: null,
-    pollDelay: POLL_MS,
-    consecutiveErrors: 0,
-    prevStatusCode: null,      // pour détecter les transitions (décollage / atterrissage)
-    autoCollapsedOnce: false,  // ne rabat automatiquement qu'une seule fois à l'atterrissage
-    notifiedDistanceBucket: null // dernier palier de 50 km déjà notifié (ex : 150 pour "passage sous 150 km")
+    mapInitStarted: false,
+    workingEndpointIndex: 0,
+    selectedId: AIRCRAFTS[0].id,
+    autoCollapsedOnce: false, // ne rabat automatiquement le module qu'une seule fois, à l'atterrissage du pape
+    aircrafts: {}             // state.aircrafts[id] = { lastFix, trail, marker, ... }
   };
 
-  // Les clés de stockage sont propres à l'avion suivi (icao24) : passer en mode test puis revenir à
-  // F-GTAU (ou l'inverse) ne doit jamais réafficher la position d'un autre appareil.
-  var STORAGE_KEY_FIX = "samu57_adsb_lastfix_" + AIRCRAFT.icao24;
-  var STORAGE_KEY_TRAIL = "samu57_adsb_trail_" + AIRCRAFT.icao24;
   var STORAGE_KEY_COLLAPSED = "samu57_adsb_collapsed";
 
-  try {
-    var savedTrail = JSON.parse(localStorage.getItem(STORAGE_KEY_TRAIL) || "null");
-    if (Array.isArray(savedTrail)) state.trail = savedTrail.filter(function(p){ return p && typeof p.lat === "number" && typeof p.lon === "number"; });
-    var savedFix = JSON.parse(localStorage.getItem(STORAGE_KEY_FIX) || "null");
-    if (savedFix && typeof savedFix.lat === "number") state.lastFix = savedFix;
-  } catch (err) {}
+  AIRCRAFTS.forEach(function(a){
+    var st = {
+      lastFix: null,        // {lat, lon, altBaro, altGeo, onGround, velocity, track, vrate, callsign, squawk, category, receivedAt}
+      trail: [],
+      marker: null,
+      markerEl: null,
+      pollTimer: null,
+      pollDelay: POLL_MS,
+      consecutiveErrors: 0,
+      prevStatusCode: null,        // pour détecter les transitions (décollage / atterrissage)
+      notifiedDistanceBucket: null, // dernier palier de 50 km déjà notifié
+      lastPollAt: null,
+      lastFetchOk: null,
+      lastMatchFound: null,
+      lastError: null,
+      callsignIdx: 0,        // pour un avion suivi par callsign : lequel des indicatifs on interroge ce cycle
+      matchedCallsign: null  // une fois trouvé, on ne change plus d'indicatif
+    };
+    // Les clés de stockage sont propres à chaque avion (ICAO24, ou identifiant interne pour un suivi
+    // par callsign) : passer en mode test, ou suivre plusieurs avions différents, ne doit jamais
+    // mélanger les positions affichées d'un avion à l'autre.
+    var storageSuffix = (a.queryType === "icao") ? a.icao24 : a.id;
+    st.storageKeyFix = "samu57_adsb_lastfix_" + storageSuffix;
+    st.storageKeyTrail = "samu57_adsb_trail_" + storageSuffix;
+    try {
+      var savedTrail = JSON.parse(localStorage.getItem(st.storageKeyTrail) || "null");
+      if (Array.isArray(savedTrail)) st.trail = savedTrail.filter(function(p){ return p && typeof p.lat === "number" && typeof p.lon === "number"; });
+      var savedFix = JSON.parse(localStorage.getItem(st.storageKeyFix) || "null");
+      if (savedFix && typeof savedFix.lat === "number") st.lastFix = savedFix;
+    } catch (err) {}
+    state.aircrafts[a.id] = st;
+  });
+
+  function getAircraftDef(id){
+    for (var i = 0; i < AIRCRAFTS.length; i++){ if (AIRCRAFTS[i].id === id) return AIRCRAFTS[i]; }
+    return null;
+  }
+  function selectedDef(){ return getAircraftDef(state.selectedId); }
+  function selectedState(){ return state.aircrafts[state.selectedId]; }
+  function aircraftLabel(def){ return def.isPope ? (def.registration + " (Pape)") : def.registration; }
 
   // ---------------- DOM refs ----------------
   var el = {};
-  ["adsbCard","adsbCollapseBtn","adsbBadge","adsbStatus","adsbUpdated","adsbTitle","adsbSub","fRegistration","fIcao","fCallsign","fCategory",
+  ["adsbCard","adsbCollapseBtn","adsbTabs","adsbBadge","adsbStatus","adsbUpdated","adsbTitle","adsbSub","fRegistration","fIcao","fCallsign","fCategory",
    "fAltitude","fSpeed","fHeading","fVrate","fLat","fLon","fSquawk","fAge","fDistMetz",
    "fDistEtz","fEta","adsbMap","adsbMapMsg","adsbRecenterBtn"].forEach(function(id){
     el[id] = document.getElementById(id);
@@ -2130,11 +2223,10 @@
     return "il y a " + h + " h " + (m % 60) + " min";
   }
 
-  // ---------------- rendu du statut ----------------
+  // ---------------- rendu du statut (bandeau du haut, reflète l'avion sélectionné) ----------------
   function applyBadge(cls, text){
     if (el.adsbBadge){
       el.adsbBadge.className = "adsb-badge" + (cls ? " " + cls : "");
-      el.adsbBadge.querySelector("span:last-child") ? null : null;
     }
     if (el.adsbStatus){
       el.adsbStatus.className = "adsb-status" + (cls ? " " + cls : "");
@@ -2165,7 +2257,7 @@
     return { code: "warn", label: "&#128992; STATUT INCERTAIN" };
   }
 
-  // ---------------- alertes (décollage / atterrissage / paliers de distance) ----------------
+  // ---------------- alertes (décollage / atterrissage / paliers de distance / programme) ----------------
   function setCollapsed(collapsed){
     if (!el.adsbCard) return;
     el.adsbCard.classList.toggle("collapsed", !!collapsed);
@@ -2173,62 +2265,63 @@
     try { localStorage.setItem(STORAGE_KEY_COLLAPSED, collapsed ? "1" : "0"); } catch (err) {}
   }
 
-  function handleStatusTransition(status){
-    var prev = state.prevStatusCode;
+  function handleStatusTransition(def, st, status){
+    var prev = st.prevStatusCode;
     if (prev !== null && prev !== status.code){
       if (status.code === "ok" && prev === "ground"){
-        safe(function(){ window.samuNotify("ok", "✈️ Décollage détecté", (AIRCRAFT.registration || "L'avion") + " vient de décoller."); });
+        safe(function(){ window.samuNotify("ok", "✈️ Décollage — " + aircraftLabel(def), aircraftLabel(def) + " vient de décoller."); });
       } else if (status.code === "ground" && prev === "ok"){
-        safe(function(){ window.samuNotify("ground", "🛬 Atterrissage détecté", (AIRCRAFT.registration || "L'avion") + " s'est posé."); });
-        if (!state.autoCollapsedOnce){
+        safe(function(){ window.samuNotify("ground", "🛬 Atterrissage — " + aircraftLabel(def), aircraftLabel(def) + " s'est posé."); });
+        // On ne rabat automatiquement le module qu'à l'atterrissage de l'avion du pape (l'info la plus
+        // suivie) — pas à celui d'un des deux autres vols, pour ne jamais masquer leur suivi en cours.
+        if (def.isPope && !state.autoCollapsedOnce){
           state.autoCollapsedOnce = true;
           setCollapsed(true);
         }
       }
     }
-    state.prevStatusCode = status.code;
+    st.prevStatusCode = status.code;
   }
 
-  function checkDistanceMilestone(distMetz, compassLabel){
+  function checkDistanceMilestone(def, st, distMetz, compassLabel){
     var bucket = Math.floor(distMetz / 50) * 50;
-    if (state.notifiedDistanceBucket === null){
-      state.notifiedDistanceBucket = bucket;
+    if (st.notifiedDistanceBucket === null){
+      st.notifiedDistanceBucket = bucket;
       return;
     }
-    if (bucket !== state.notifiedDistanceBucket){
+    if (bucket !== st.notifiedDistanceBucket){
       safe(function(){
-        window.samuNotify("ok", "Palier " + bucket + " km de Metz",
-          (AIRCRAFT.registration || "L'avion") + " est à environ " + Math.round(distMetz) + " km de Metz (" + compassLabel + ").");
+        window.samuNotify("ok", "Palier " + bucket + " km — " + aircraftLabel(def),
+          aircraftLabel(def) + " est à environ " + Math.round(distMetz) + " km de Metz (" + compassLabel + ").");
       });
-      state.notifiedDistanceBucket = bucket;
+      st.notifiedDistanceBucket = bucket;
     }
   }
 
-  // ---------------- carte MapLibre GL JS ----------------
+  // ---------------- carte MapLibre GL JS (partagée entre les 3 avions) ----------------
   var PLANE_SVG =
     '<svg viewBox="0 0 24 24" width="30" height="30" xmlns="http://www.w3.org/2000/svg">' +
     '<path d="M12 1.5 L14 9 L22.5 13 L22.5 15 L14 12.5 L14 18 L17.5 20.5 L17.5 22 L12 20.5 L6.5 22 L6.5 20.5 L10 18 L10 12.5 L1.5 15 L1.5 13 L10 9 Z" ' +
     'fill="{COLOR}" stroke="#06110a" stroke-width="0.6"/></svg>';
 
-  function planeSvg(onGround){
-    var color = onGround ? "#57d9ff" : "#35d976";
+  function planeSvg(color){
     return PLANE_SVG.replace("{COLOR}", color);
   }
 
-  var TRAIL_SOURCE_ID = "adsb-trail";
-  var TRAIL_LAYER_ID = "adsb-trail-line";
+  function trailSourceId(id){ return "adsb-trail-" + id; }
+  function trailLayerId(id){ return "adsb-trail-line-" + id; }
 
-  function addTrailLayer(){
-    if (!state.map || state.map.getSource(TRAIL_SOURCE_ID)) return;
-    state.map.addSource(TRAIL_SOURCE_ID, {
+  function addTrailLayer(def){
+    if (!state.map || state.map.getSource(trailSourceId(def.id))) return;
+    state.map.addSource(trailSourceId(def.id), {
       type: "geojson",
       data: { type: "Feature", geometry: { type: "LineString", coordinates: [] } }
     });
     state.map.addLayer({
-      id: TRAIL_LAYER_ID,
+      id: trailLayerId(def.id),
       type: "line",
-      source: TRAIL_SOURCE_ID,
-      paint: { "line-color": "#ffb340", "line-width": 2, "line-opacity": 0.7 }
+      source: trailSourceId(def.id),
+      paint: { "line-color": def.color, "line-width": def.isPope ? 2.5 : 1.5, "line-opacity": def.isPope ? 0.8 : 0.55 }
     });
   }
 
@@ -2250,9 +2343,9 @@
     });
   }
 
-  // Plusieurs fournisseurs de tuiles testés en parallèle : certains réseaux
-  // hospitaliers/pare-feux bloquent un domaine mais pas un autre. On choisit
-  // automatiquement le premier qui répond, sans jamais planter le module.
+  // Plusieurs fournisseurs de tuiles testés dans l'ordre : certains réseaux hospitaliers/pare-feux
+  // bloquent un domaine mais pas un autre. On choisit automatiquement le premier qui répond, sans
+  // jamais planter le module.
   // NB : plusieurs fournisseurs de tuiles "gratuits" imposent en réalité une clé API ou bloquent l'usage
   // embarqué (tile.openstreetmap.org renvoie une tuile "Access blocked" en HTTP 200 ; CARTO exige
   // désormais une clé). On utilise donc les couches Esri (ArcGIS Online), utilisables sans clé pour un
@@ -2338,9 +2431,14 @@
 
       state.map.on("load", function(){
         safe(function(){
-          addTrailLayer();
+          AIRCRAFTS.forEach(function(a){ addTrailLayer(a); });
           addStaticMarkers();
-          if (state.lastFix) updateMap(state.lastFix, Date.now());
+          var now = Date.now();
+          AIRCRAFTS.forEach(function(a){
+            var st = state.aircrafts[a.id];
+            if (st.lastFix) updateMapMarker(a, st, now);
+          });
+          frameOnAllAircraft();
         });
       });
 
@@ -2357,7 +2455,7 @@
         el.adsbRecenterBtn.addEventListener("click", function(){
           state.userMovedMap = false;
           showRecenter(false);
-          if (state.lastFix) frameOnAircraft(state.lastFix.lat, state.lastFix.lon);
+          frameOnAllAircraft();
         });
       }
 
@@ -2393,101 +2491,114 @@
     if (el.adsbRecenterBtn) el.adsbRecenterBtn.classList.toggle("show", !!show);
   }
 
-  // Cadrage ~100 km de rayon autour de l'avion (bounding box en degrés).
-  function frameOnAircraft(lat, lon){
+  // Cadrage englobant Metz + tous les avions dont la position est encore fraîche (peu importe l'onglet
+  // sélectionné à l'écran) : les 3 vols restent visibles ensemble sur la carte.
+  function frameOnAllAircraft(){
     if (!state.map) return;
-    var dLat = 100 / 111; // ~0.9°
-    var dLon = 100 / (111 * Math.max(0.2, Math.cos(toRad(lat))));
-    var bounds = new maplibregl.LngLatBounds(
-      [lon - dLon, lat - dLat],
-      [lon + dLon, lat + dLat]
-    );
-    // on garantit aussi que Metz reste visible si l'avion en est proche
-    bounds.extend([METZ.lon, METZ.lat]);
-    state.map.fitBounds(bounds, { animate: true, maxZoom: 10, padding: 20 });
+    var now = Date.now();
+    var pts = [[METZ.lon, METZ.lat]];
+    AIRCRAFTS.forEach(function(a){
+      var st = state.aircrafts[a.id];
+      var fix = st.lastFix;
+      if (fix && (now - fix.receivedAt) <= LOST_MS){ pts.push([fix.lon, fix.lat]); }
+    });
+    if (pts.length === 1){
+      state.map.easeTo({ center: pts[0], zoom: 8 });
+      return;
+    }
+    var bounds = new maplibregl.LngLatBounds(pts[0], pts[0]);
+    pts.forEach(function(p){ bounds.extend(p); });
+    state.map.fitBounds(bounds, { animate: true, maxZoom: 10, padding: 60 });
   }
 
-  function updateMap(fix, now){
+  function updateMapMarker(def, st, now){
     var map = ensureMap();
     if (!map) return;
 
+    var fix = st.lastFix;
     var isFresh = fix && (now - fix.receivedAt) <= LOST_MS;
     if (!isFresh) return; // on ne déplace pas l'icône avec une position trop ancienne
 
     if (!map.isStyleLoaded()){
-      // le style se charge encore ; l'événement "load" rappellera updateMap()
+      // le style se charge encore ; l'événement "load" rappellera updateMapMarker() pour chaque avion
       return;
     }
 
     var lngLat = [fix.lon, fix.lat];
 
-    if (!state.marker){
+    if (!st.marker){
       var markerEl = document.createElement("div");
-      markerEl.className = "adsb-plane-icon" + (fix.onGround ? " on-ground" : "");
-      markerEl.innerHTML = planeSvg(fix.onGround === true);
-      state.markerEl = markerEl;
-      state.marker = new maplibregl.Marker({
+      markerEl.className = "adsb-plane-icon" + (fix.onGround ? " on-ground" : "") + (def.isPope ? " pope" : "");
+      markerEl.innerHTML = planeSvg(def.color);
+      st.markerEl = markerEl;
+      st.marker = new maplibregl.Marker({
         element: markerEl,
         rotationAlignment: "map",
         pitchAlignment: "map",
         rotation: (typeof fix.track === "number") ? fix.track : 0
       }).setLngLat(lngLat).addTo(map);
     } else {
-      state.marker.setLngLat(lngLat);
-      state.marker.setRotation((typeof fix.track === "number") ? fix.track : 0);
-      if (state.markerEl){
-        var wasGround = state.markerEl.classList.contains("on-ground");
-        if (wasGround !== (fix.onGround === true)){
-          state.markerEl.className = "adsb-plane-icon" + (fix.onGround ? " on-ground" : "");
-          state.markerEl.innerHTML = planeSvg(fix.onGround === true);
-        }
+      st.marker.setLngLat(lngLat);
+      st.marker.setRotation((typeof fix.track === "number") ? fix.track : 0);
+      if (st.markerEl){
+        st.markerEl.classList.toggle("on-ground", fix.onGround === true);
       }
     }
 
-    var popupHtml = "<strong>" + AIRCRAFT.registration + "</strong><br>" +
+    var popupHtml = "<strong>" + aircraftLabel(def) + "</strong><br>" +
       (fix.callsign || "Callsign N/A") + "<br>" +
       (fix.onGround ? "Au sol" : "En vol");
-    state.marker.setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(popupHtml));
+    st.marker.setPopup(new maplibregl.Popup({ offset: 20 }).setHTML(popupHtml));
 
-    var trailSource = map.getSource(TRAIL_SOURCE_ID);
+    var trailSource = map.getSource(trailSourceId(def.id));
     if (trailSource){
       trailSource.setData({
         type: "Feature",
-        geometry: { type: "LineString", coordinates: state.trail.map(function(p){ return [p.lon, p.lat]; }) }
+        geometry: { type: "LineString", coordinates: st.trail.map(function(p){ return [p.lon, p.lat]; }) }
       });
     }
 
     if (!state.userMovedMap){
-      frameOnAircraft(fix.lat, fix.lon);
+      frameOnAllAircraft();
     }
   }
 
   // ---------------- traitement des données ----------------
-  function pushTrail(fix){
-    state.trail.push({ lat: fix.lat, lon: fix.lon, t: fix.receivedAt });
+  function pushTrail(st, fix){
+    st.trail.push({ lat: fix.lat, lon: fix.lon, t: fix.receivedAt });
     var cutoff = fix.receivedAt - TRAIL_MAX_MS;
-    state.trail = state.trail.filter(function(p){ return p.t >= cutoff; });
-    try { localStorage.setItem(STORAGE_KEY_TRAIL, JSON.stringify(state.trail)); } catch (err) {}
+    st.trail = st.trail.filter(function(p){ return p.t >= cutoff; });
+    try { localStorage.setItem(st.storageKeyTrail, JSON.stringify(st.trail)); } catch (err) {}
   }
 
   function setField(id, value){
     if (el[id]) el[id].textContent = (value === null || value === undefined || value === "") ? "N/A" : value;
   }
 
-  function render(){
+  // Rendu du panneau de gauche (titre, bandeau de statut, champs de données) pour l'avion actuellement
+  // sélectionné dans les onglets. Ne fait AUCUN appel réseau : purement visuel — appelé aussi bien
+  // après un cycle de sondage que lors d'un simple changement d'onglet.
+  function renderSelectedPanel(){
+    var def = selectedDef();
+    var st = selectedState();
+    if (!def || !st) return;
     var now = Date.now();
-    var fix = state.lastFix;
+    var fix = st.lastFix;
     var status = computeStatus(fix, now);
     applyBadge(status.code === "ok" ? "ok" : (status.code === "ground" ? "ground" : (status.code === "warn" ? "warn" : "off")), status.label);
-    if (fix) handleStatusTransition(status);
+
+    if (el.adsbTitle) el.adsbTitle.innerHTML = "SUIVI ADS-B &mdash; " + def.registration + (def.isPope ? " (vol papal)" : "");
+    if (el.adsbSub) el.adsbSub.innerHTML = def.type + " &middot; " + def.operator + (TEST_MODE && def.id === "fgtau" ? " (mode test)" : "");
+    if (el.fRegistration) el.fRegistration.textContent = (fix && fix.registration) ? fix.registration : def.registration;
+    if (el.fIcao) el.fIcao.textContent = (def.queryType === "icao") ? def.icao24.toUpperCase() : ((fix && fix.icao24) ? fix.icao24.toUpperCase() : "recherche en cours…");
 
     if (el.adsbUpdated){
-      var updatedTxt = "Dernière mise à jour : " + (state.lastPollAt ? fmtAge(now - state.lastPollAt) : "—");
-      if (state.lastFetchOk === false && state.lastError){
-        updatedTxt += "  ⚠ " + state.lastError;
-      } else if (state.lastFetchOk === true && state.lastMatchFound === false){
+      var updatedTxt = "Dernière mise à jour : " + (st.lastPollAt ? fmtAge(now - st.lastPollAt) : "—");
+      if (st.lastFetchOk === false && st.lastError){
+        updatedTxt += "  ⚠ " + st.lastError;
+      } else if (st.lastFetchOk === true && st.lastMatchFound === false){
         updatedTxt += "  (avion non détecté pour l'instant — source : " + (DATA_ENDPOINT_NAMES[state.workingEndpointIndex || 0] || "?") + ")";
-      } else if (state.lastFetchOk === true && state.lastMatchFound === true){
+      } else if (st.lastFetchOk === true && st.lastMatchFound === true){
         updatedTxt += "  (source : " + (DATA_ENDPOINT_NAMES[state.workingEndpointIndex || 0] || "?") + ")";
       }
       el.adsbUpdated.textContent = updatedTxt;
@@ -2533,7 +2644,6 @@
     var brg = bearingDeg(METZ.lat, METZ.lon, fix.lat, fix.lon);
     setField("fDistMetz", fmtNum(Math.round(distMetz)) + " km (" + compassPoint(brg) + " de Metz)");
     setField("fDistEtz", fmtNum(Math.round(distEtz)) + " km");
-    if (status.code === "ok" || status.code === "warn") checkDistanceMilestone(distMetz, compassPoint(brg));
 
     if (status.code === "ok" && fix.velocity && fix.velocity > 3 && fix.onGround === false){
       var etaMin = (distEtz / (fix.velocity * 1.852)) * 60;
@@ -2548,12 +2658,32 @@
     } else {
       setField("fEta", "N/A");
     }
+  }
 
-    updateMap(fix, now);
+  // Calcule le statut, déclenche les alertes/jalons pour les TROIS avions (indépendamment de celui
+  // affiché à l'écran), met à jour leurs marqueurs sur la carte, puis rafraîchit le panneau visible.
+  function renderAll(){
+    var now = Date.now();
+    AIRCRAFTS.forEach(function(def){
+      var st = state.aircrafts[def.id];
+      var fix = st.lastFix;
+      if (fix){
+        var status = computeStatus(fix, now);
+        handleStatusTransition(def, st, status);
+        if (status.code === "ok" || status.code === "warn"){
+          var distMetz = haversineKm(fix.lat, fix.lon, METZ.lat, METZ.lon);
+          var brg = bearingDeg(METZ.lat, METZ.lon, fix.lat, fix.lon);
+          checkDistanceMilestone(def, st, distMetz, compassPoint(brg));
+        }
+      }
+      updateMapMarker(def, st, now);
+    });
+    renderSelectedPanel();
   }
 
   // ---------------- appel API ----------------
-  // Format adsb.lol /v2/icao/{hex} — un objet par avion dans data.ac[], compatible schéma ADS-B Exchange v2.
+  // Format adsb.lol /v2/icao/{hex} ou /v2/callsign/{indicatif} — un objet par avion dans data.ac[],
+  // compatible schéma ADS-B Exchange v2.
   function parseAircraft(ac, serverNow){
     if (!ac || typeof ac !== "object") return null;
     var groundFlag = (ac.alt_baro === "ground");
@@ -2581,63 +2711,102 @@
     };
   }
 
-  function poll(){
-    fetchAdsbData(AIRCRAFT.icao24, state.workingEndpointIndex || 0, function(data, err){
+  function pollAircraft(def){
+    var st = state.aircrafts[def.id];
+    var queryValue = (def.queryType === "callsign") ? def.callsigns[st.callsignIdx % def.callsigns.length] : def.icao24;
+    var target = { type: def.queryType, value: queryValue };
+
+    fetchAdsbData(target, state.workingEndpointIndex || 0, function(data, err){
       if (err){
-        state.consecutiveErrors++;
-        state.lastPollAt = Date.now();
-        state.lastFetchOk = false;
-        state.lastMatchFound = false;
-        state.lastError = "toutes les sources ADS-B sont indisponibles pour le moment";
-        state.pollDelay = Math.min(120000, POLL_MS * Math.pow(1.6, Math.min(state.consecutiveErrors, 6)));
-        safe(render);
-        state.pollTimer = setTimeout(poll, state.pollDelay);
+        st.consecutiveErrors++;
+        st.lastPollAt = Date.now();
+        st.lastFetchOk = false;
+        st.lastMatchFound = false;
+        st.lastError = "toutes les sources ADS-B sont indisponibles pour le moment";
+        st.pollDelay = Math.min(120000, POLL_MS * Math.pow(1.6, Math.min(st.consecutiveErrors, 6)));
+        safe(renderAll);
+        st.pollTimer = setTimeout(function(){ pollAircraft(def); }, st.pollDelay);
         return;
       }
 
-      state.consecutiveErrors = 0;
-      state.pollDelay = POLL_MS;
-      state.lastPollAt = Date.now();
-      state.lastFetchOk = true;
-      state.lastError = null;
+      st.consecutiveErrors = 0;
+      st.pollDelay = POLL_MS;
+      st.lastPollAt = Date.now();
+      st.lastFetchOk = true;
+      st.lastError = null;
 
       var list = (data && Array.isArray(data.ac)) ? data.ac : null;
-      var match = list ? list.filter(function(a){ return a && typeof a.hex === "string" && a.hex.toLowerCase() === AIRCRAFT.icao24.toLowerCase(); })[0] : null;
-      state.lastMatchFound = !!match;
+      var match = null;
+      if (list && list.length){
+        if (def.queryType === "icao"){
+          match = list.filter(function(a){ return a && typeof a.hex === "string" && a.hex.toLowerCase() === def.icao24.toLowerCase(); })[0] || null;
+        } else {
+          // Requête par callsign : l'API ne renvoie normalement que l'avion correspondant, mais on
+          // vérifie quand même le callsign reçu (au cas où plusieurs appareils partageraient la réponse).
+          var wanted = queryValue.trim().toUpperCase();
+          match = list.filter(function(a){ return a && typeof a.flight === "string" && a.flight.trim().toUpperCase() === wanted; })[0] || list[0];
+        }
+      }
+      st.lastMatchFound = !!match;
 
       if (match){
         var fix = parseAircraft(match, data.now);
         if (fix && typeof fix.lat === "number" && typeof fix.lon === "number"){
-          state.lastFix = fix;
-          try { localStorage.setItem(STORAGE_KEY_FIX, JSON.stringify(fix)); } catch (e2) {}
-          pushTrail(fix);
-          if (TEST_MODE){
-            safe(function(){
-              if (fix.registration && el.fRegistration) el.fRegistration.textContent = fix.registration;
-              if (fix.typeCode && el.adsbSub) el.adsbSub.textContent = "Type " + fix.typeCode + " · ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
-            });
-          }
+          st.lastFix = fix;
+          if (def.queryType === "callsign") st.matchedCallsign = queryValue;
+          try { localStorage.setItem(st.storageKeyFix, JSON.stringify(fix)); } catch (e2) {}
+          pushTrail(st, fix);
         }
+      } else if (def.queryType === "callsign" && def.callsigns.length > 1 && !st.matchedCallsign){
+        // Pas encore trouvé lequel des deux indicatifs correspond à l'avion réellement en vol :
+        // on alterne à chaque cycle pour tester l'autre.
+        st.callsignIdx = (st.callsignIdx + 1) % def.callsigns.length;
       }
       // Si l'avion n'apparaît pas dans la réponse, on NE remet PAS lastFix à null :
       // on conserve la dernière position connue et son âge continuera de s'afficher.
-      safe(render);
-      state.pollTimer = setTimeout(poll, state.pollDelay);
+      safe(renderAll);
+      st.pollTimer = setTimeout(function(){ pollAircraft(def); }, st.pollDelay);
     });
   }
 
   function startClockTick(){
-    setInterval(function(){ safe(render); }, 1000);
+    setInterval(function(){ safe(renderAll); }, 1000);
+  }
+
+  // ---------------- sélecteur d'avion (onglets) ----------------
+  function buildTabs(){
+    if (!el.adsbTabs) return;
+    el.adsbTabs.innerHTML = "";
+    AIRCRAFTS.forEach(function(def){
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "adsb-tab" + (def.id === state.selectedId ? " active" : "");
+      btn.setAttribute("data-aircraft", def.id);
+      var dot = document.createElement("span");
+      dot.className = "adsb-tab-dot";
+      dot.style.background = def.color;
+      dot.style.color = def.color;
+      btn.appendChild(dot);
+      btn.appendChild(document.createTextNode(def.isPope ? (def.registration + " (Pape)") : def.registration));
+      btn.addEventListener("click", function(){
+        if (state.selectedId === def.id) return;
+        state.selectedId = def.id;
+        var tabs = el.adsbTabs.querySelectorAll(".adsb-tab");
+        for (var i = 0; i < tabs.length; i++){
+          tabs[i].classList.toggle("active", tabs[i].getAttribute("data-aircraft") === def.id);
+        }
+        // Changement purement visuel : aucun rechargement de carte, aucune nouvelle requête réseau —
+        // le sondage des 3 avions continue en tâche de fond quel que soit l'onglet affiché.
+        safe(renderSelectedPanel);
+      });
+      el.adsbTabs.appendChild(btn);
+    });
   }
 
   // ---------------- démarrage ----------------
   safe(function(){
-    if (el.fRegistration) el.fRegistration.textContent = AIRCRAFT.registration;
-    if (el.fIcao) el.fIcao.textContent = AIRCRAFT.icao24.toUpperCase();
-    if (TEST_MODE){
-      if (el.adsbTitle) el.adsbTitle.innerHTML = "SUIVI ADS-B &mdash; MODE TEST (" + AIRCRAFT.registration + ")";
-      if (el.adsbSub) el.adsbSub.textContent = "ICAO24 " + AIRCRAFT.icao24.toUpperCase() + " — retirez ?icao24=... de l'URL pour revenir à F-GTAU";
-    }
+    buildTabs();
+
     if (el.adsbCollapseBtn){
       el.adsbCollapseBtn.addEventListener("click", function(){
         var isCollapsed = el.adsbCard && el.adsbCard.classList.contains("collapsed");
@@ -2646,21 +2815,25 @@
     }
     try {
       if (localStorage.getItem(STORAGE_KEY_COLLAPSED) === "1"){
-        // Ne restaure un état "réduit" que si l'avion était déjà posé lors de la dernière session
-        // connue : on ne veut jamais masquer le module par défaut au premier chargement.
-        if (state.lastFix && state.lastFix.onGround === true){
+        // Ne restaure un état "réduit" que si l'avion du pape était déjà posé lors de la dernière
+        // session connue : on ne veut jamais masquer le module par défaut au premier chargement.
+        var popeSt = state.aircrafts[AIRCRAFTS[0].id];
+        if (popeSt.lastFix && popeSt.lastFix.onGround === true){
           state.autoCollapsedOnce = true;
           setCollapsed(true);
         }
       }
     } catch (err) {}
+
     initMap();
-    render();
+    renderAll();
     if (!navigator.onLine){
       applyBadge("off", "&#9898; NAVIGATEUR HORS LIGNE");
     }
-    window.addEventListener("online", function(){ safe(poll); });
-    poll();
+    window.addEventListener("online", function(){
+      AIRCRAFTS.forEach(function(def){ safe(function(){ pollAircraft(def); }); });
+    });
+    AIRCRAFTS.forEach(function(def){ pollAircraft(def); });
     startClockTick();
   });
 
