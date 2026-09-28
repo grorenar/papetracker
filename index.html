@@ -3039,6 +3039,13 @@
   // grande, plus la reconnaissance devient robuste aux différents angles/éclairages/expressions.
   var MATCH_DISTANCE_THRESHOLD = 0.6; // seuil par défaut recommandé par face-api.js
   var SCAN_INTERVAL_MS = 2500;
+  // Le flux KTO montre souvent des visages petits/lointains (plan large sur la foule/l'estrade).
+  // On monte la résolution d'analyse (par défaut 416) et on baisse le seuil de confiance (par
+  // défaut 0.5) pour le scan en direct uniquement, afin de repérer davantage de petits visages,
+  // au prix d'un peu plus de calcul par frame et de plus de détections incertaines.
+  function makeLiveScanDetectorOptions(){
+    return new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.3 });
+  }
 
   var video = document.getElementById("liveVideo");
   var btn = document.getElementById("faceRecoBtn");
@@ -3208,7 +3215,7 @@
       canvas.height = video.videoHeight;
       canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions())
+      faceapi.detectAllFaces(canvas, makeLiveScanDetectorOptions())
         .withFaceLandmarks()
         .withFaceDescriptors()
         .then(function(detections){
