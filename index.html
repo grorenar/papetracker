@@ -3063,38 +3063,103 @@
   var overlay = document.getElementById("faceRecoOverlay");
 
   function clearOverlay(){
+    trackedFaces = [];
     if (!overlay) return;
     var ctx = overlay.getContext("2d");
     ctx.clearRect(0, 0, overlay.width, overlay.height);
   }
 
-  // Dessine un rectangle par visage détecté : vert si ça correspond à la référence (pape),
-  // rouge sinon. Les coordonnées de détection sont dans le référentiel du canvas d'analyse
-  // (résolution native de la vidéo) ; on redimensionne le canvas overlay à cette même
-  // résolution puis on le laisse s'afficher à la taille CSS de la vidéo (width/height:100%).
-  function drawDetections(detections, matches){
+  // La détection réelle (réseau de neurones) ne peut tourner qu'au rythme de SCAN_INTERVAL_MS,
+  // sinon le poste sature. Pour un rendu "ultra fluide" malgré ça, on garde en mémoire un suivi
+  // par visage (trackedFaces) avec sa vitesse de déplacement (px/ms) déduite des deux dernières
+  // détections réelles, puis on extrapole sa position à chaque frame d'un rendu à 60fps
+  // (requestAnimationFrame) — exactement le même principe de "dead reckoning" que pour les avions
+  // ADS-B, mais appliqué aux rectangles de visage entre deux analyses IA.
+  var trackedFaces = [];
+  var EXTRAPOLATE_FACE_CAP_MS = SCAN_INTERVAL_MS * 1.5;
+  var FACE_STALE_MS = SCAN_INTERVAL_MS * 3;
+
+  function boxCenter(b){ return { cx: b.x + b.width / 2, cy: b.y + b.height / 2 }; }
+
+  // Rapproche les nouvelles détections des visages déjà suivis (par proximité du centre) pour
+  // calculer une vitesse, plutôt que de réinitialiser le suivi à chaque scan.
+  function updateTrackedFaces(newBoxes){
+    var now = Date.now();
+    var used = trackedFaces.map(function(){ return false; });
+    newBoxes.forEach(function(nb){
+      var nc = boxCenter(nb);
+      var bestIdx = -1, bestDist = Infinity;
+      trackedFaces.forEach(function(tf, ti){
+        if (used[ti]) return;
+        var tc = boxCenter(tf);
+        var dist = Math.hypot(nc.cx - tc.cx, nc.cy - tc.cy);
+        var maxDist = Math.max(tf.width, tf.height) * 1.5; // tolère un déplacement raisonnable
+        if (dist < maxDist && dist < bestDist){ bestDist = dist; bestIdx = ti; }
+      });
+      if (bestIdx >= 0){
+        var tf = trackedFaces[bestIdx];
+        var dt = now - tf.updatedAt;
+        if (dt > 0){
+          tf.vx = (nb.x - tf.x) / dt;
+          tf.vy = (nb.y - tf.y) / dt;
+          tf.vw = (nb.width - tf.width) / dt;
+          tf.vh = (nb.height - tf.height) / dt;
+        }
+        tf.x = nb.x; tf.y = nb.y; tf.width = nb.width; tf.height = nb.height;
+        tf.color = nb.color; tf.label = nb.label;
+        tf.updatedAt = now;
+        used[bestIdx] = true;
+      } else {
+        trackedFaces.push({
+          x: nb.x, y: nb.y, width: nb.width, height: nb.height,
+          vx: 0, vy: 0, vw: 0, vh: 0,
+          color: nb.color, label: nb.label,
+          updatedAt: now
+        });
+      }
+    });
+    // Retire les visages non revus depuis trop longtemps (disparus de l'écran).
+    trackedFaces = trackedFaces.filter(function(tf){ return (now - tf.updatedAt) < FACE_STALE_MS; });
+  }
+
+  // Dessine chaque visage suivi à sa position extrapolée à l'instant présent (appelé à chaque
+  // frame par la boucle requestAnimationFrame, pas seulement à chaque analyse IA).
+  function renderTrackedFacesFrame(){
     if (!overlay || !video || !video.videoWidth) return;
     if (overlay.width !== video.videoWidth) overlay.width = video.videoWidth;
     if (overlay.height !== video.videoHeight) overlay.height = video.videoHeight;
     var ctx = overlay.getContext("2d");
     ctx.clearRect(0, 0, overlay.width, overlay.height);
-    detections.forEach(function(d, i){
-      var box = d.detection ? d.detection.box : d.box;
-      if (!box) return;
-      var isPope = matches && matches[i] && matches[i].label === REFERENCE_LABEL;
-      var color = isPope ? "#35d976" : "#ff4d4f";
+    var now = Date.now();
+    trackedFaces.forEach(function(tf){
+      var dt = Math.min(now - tf.updatedAt, EXTRAPOLATE_FACE_CAP_MS);
+      var x = tf.x + tf.vx * dt;
+      var y = tf.y + tf.vy * dt;
+      var w = tf.width + tf.vw * dt;
+      var h = tf.height + tf.vh * dt;
       ctx.lineWidth = Math.max(2, overlay.width / 240);
-      ctx.strokeStyle = color;
-      ctx.strokeRect(box.x, box.y, box.width, box.height);
-      var label = isPope ? "PAPE (" + matches[i].distance.toFixed(2) + ")" : "?";
+      ctx.strokeStyle = tf.color;
+      ctx.strokeRect(x, y, w, h);
       var fontSize = Math.max(12, Math.round(overlay.width / 60));
       ctx.font = "bold " + fontSize + "px sans-serif";
-      var textW = ctx.measureText(label).width;
-      ctx.fillStyle = color;
-      ctx.fillRect(box.x, Math.max(0, box.y - fontSize - 4), textW + 8, fontSize + 4);
+      var textW = ctx.measureText(tf.label).width;
+      ctx.fillStyle = tf.color;
+      ctx.fillRect(x, Math.max(0, y - fontSize - 4), textW + 8, fontSize + 4);
       ctx.fillStyle = "#0a0a0a";
-      ctx.fillText(label, box.x + 4, Math.max(fontSize, box.y - 4));
+      ctx.fillText(tf.label, x + 4, Math.max(fontSize, y - 4));
     });
+  }
+
+  var renderLoopActive = false;
+  function renderLoopTick(){
+    if (!running){ renderLoopActive = false; return; }
+    safe(renderTrackedFacesFrame);
+    requestAnimationFrame(renderLoopTick);
+  }
+  function startRenderLoop(){
+    if (renderLoopActive) return;
+    renderLoopActive = true;
+    requestAnimationFrame(renderLoopTick);
   }
 
   var scanTimer = null;
@@ -3280,12 +3345,23 @@
           return;
         }
         if (!faceMatcher){
-          drawDetections(detections, null);
+          updateTrackedFaces(detections.map(function(d){
+            var box = d.detection ? d.detection.box : d.box;
+            return { x: box.x, y: box.y, width: box.width, height: box.height, color: "#ff4d4f", label: "?" };
+          }));
           setResult(detections.length + " visage(s) détecté(s), mais aucune photo de référence n'est chargée — ajoutez-en via le bouton \u{1F4F7}.", "warn");
           return;
         }
         var matches = detections.map(function(d){ return faceMatcher.findBestMatch(d.descriptor); });
-        drawDetections(detections, matches);
+        updateTrackedFaces(detections.map(function(d, i){
+          var box = d.detection ? d.detection.box : d.box;
+          var isPope = matches[i] && matches[i].label === REFERENCE_LABEL;
+          return {
+            x: box.x, y: box.y, width: box.width, height: box.height,
+            color: isPope ? "#35d976" : "#ff4d4f",
+            label: isPope ? "PAPE (" + matches[i].distance.toFixed(2) + ")" : "?"
+          };
+        }));
         var best = null;
         matches.forEach(function(match){
           if (!best || match.distance < best.distance) best = match;
@@ -3327,6 +3403,7 @@
     running = true;
     if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : désactiver";
     setResult("Initialisation…", null);
+    startRenderLoop(); // boucle d'affichage 60fps, indépendante du rythme des analyses IA
     ensureModelsLoaded().then(function(){
       if (!running) return; // l'utilisateur a désactivé pendant le chargement
       // Chargement des photos Wikimedia en best-effort : ne bloque jamais le démarrage,
