@@ -1136,6 +1136,10 @@
         <button class="btn" id="canvasTestBtn" title="Vérifie si le flux vidéo autorise la lecture pixel par pixel (préalable à toute reconnaissance faciale)">&#129514; Tester capture d'image (préalable reconnaissance faciale)</button>
         <span class="live-foot-note" id="canvasTestResult">Test non lancé.</span>
       </div>
+      <div class="live-foot" style="border-top:1px dashed var(--border);">
+        <button class="btn" id="faceRecoBtn" title="Reconnaissance faciale expérimentale (face-api.js, entièrement dans le navigateur)">&#128064; Reconnaissance faciale (expérimental) : activer</button>
+        <span class="live-foot-note" id="faceRecoResult">Désactivée. Best-effort, jamais fiable à 100% &mdash; à ne jamais utiliser pour une décision opérationnelle.</span>
+      </div>
     </div>
 
     <div class="adsb-card" id="adsbCard">
@@ -2988,6 +2992,201 @@
   // Un essai automatique dès que la vidéo a une première image, pour avoir un verdict même sans clic.
   if (video){
     video.addEventListener("loadeddata", function(){ setTimeout(runTest, 500); }, { once: true });
+  }
+})();
+</script>
+
+<script>
+// ------------------------------------------------------------------
+// Reconnaissance faciale expérimentale (best-effort) : détecte si le visage du pape Léon XIV est
+// visible sur le direct KTO. Tourne entièrement dans le navigateur via face-api.js (TensorFlow.js),
+// chargé par CDN — aucun fichier de projet séparé, comme pour le reste de la page. Le module est
+// désactivé par défaut (bouton à activer manuellement), isolé dans sa propre IIFE, et ne peut jamais
+// casser le reste de la page : toute erreur reste confinée ici (voir safe()).
+//
+// AVERTISSEMENT IMPORTANT : c'est un outil "best-effort", pas une preuve. Les faux négatifs (pape
+// visible mais non reconnu — angle, distance à la caméra, éclairage, visage partiellement masqué) et
+// les faux positifs (visage similaire pris pour le pape) sont attendus et fréquents à distance sur un
+// flux TV compressé. À ne jamais utiliser comme base d'une décision opérationnelle — uniquement à
+// titre indicatif/ludique sur ce poste de régulation.
+// ------------------------------------------------------------------
+(function(){
+  "use strict";
+
+  var FACEAPI_SRC = "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js";
+  var MODEL_BASE = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js-models@master/";
+  var REFERENCE_LABEL = "Pape Léon XIV";
+  // Photos de référence (Wikimedia Commons, libres de droits) : plusieurs photos différentes améliorent
+  // la fiabilité de la comparaison. Special:FilePath redirige vers le fichier réel sans avoir besoin de
+  // connaître son URL hashée ; Wikimedia sert ses fichiers médias avec les en-têtes CORS nécessaires.
+  var REFERENCE_PHOTO_URLS = [
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%20(May%202025).jpg",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Portrait%20of%20Pope%20Leo%20XIV%201%20(20150512).png",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%202.jpg",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%203.png",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%204.png",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%206.png",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%207.png",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV.png",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%20on%20the%20loggia.jpg",
+    "https://commons.wikimedia.org/wiki/Special:FilePath/Pope%20Leo%20XIV%20edit.png"
+  ];
+  // Chaque URL est essayée indépendamment (voir ensureReady ci-dessous) : une photo introuvable, sans
+  // visage détectable, ou dont le fichier a été renommé sur Commons est simplement ignorée (avec un
+  // avertissement en console) plutôt que de faire échouer toute l'initialisation — plus la liste est
+  // grande, plus la reconnaissance devient robuste aux différents angles/éclairages/expressions.
+  var MATCH_DISTANCE_THRESHOLD = 0.6; // seuil par défaut recommandé par face-api.js
+  var SCAN_INTERVAL_MS = 2500;
+
+  var video = document.getElementById("liveVideo");
+  var btn = document.getElementById("faceRecoBtn");
+  var resultEl = document.getElementById("faceRecoResult");
+
+  var scanTimer = null;
+  var running = false;
+  var faceMatcher = null;
+  var modelsReady = false;
+  var loadingPromise = null;
+
+  function safe(fn){
+    try { fn(); } catch (err) {
+      try { console.warn("[Reco faciale] erreur interceptée : " + (err && err.stack ? err.stack : err)); } catch (e) {}
+    }
+  }
+
+  function setResult(text, tone){
+    if (!resultEl) return;
+    resultEl.textContent = text;
+    resultEl.style.color = (tone === "ok") ? "var(--accent-ok)" : (tone === "warn") ? "var(--accent-warn)" : (tone === "bad") ? "var(--accent-warn)" : "";
+  }
+
+  function loadScript(src){
+    return new Promise(function(resolve, reject){
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = function(){ resolve(); };
+      s.onerror = function(){ reject(new Error("échec de chargement de " + src)); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // Charge face-api.js, ses modèles, et calcule les empreintes de référence du pape à partir des
+  // photos ci-dessus. Ne fait ce travail (potentiellement long, plusieurs Mo de poids de modèle) que la
+  // première fois qu'on active la reconnaissance, pas au chargement de la page.
+  function ensureReady(){
+    if (loadingPromise) return loadingPromise;
+
+    loadingPromise = Promise.resolve()
+      .then(function(){
+        if (window.faceapi) return;
+        setResult("Chargement de la bibliothèque de reconnaissance faciale…", null);
+        return loadScript(FACEAPI_SRC);
+      })
+      .then(function(){
+        setResult("Chargement des modèles de détection…", null);
+        return Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_BASE + "tiny_face_detector"),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_BASE + "face_landmark_68"),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_BASE + "face_recognition")
+        ]);
+      })
+      .then(function(){
+        setResult("Analyse des photos de référence du pape…", null);
+        return Promise.all(REFERENCE_PHOTO_URLS.map(function(url){
+          return faceapi.fetchImage(url)
+            .then(function(img){
+              return faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+                .withFaceLandmarks()
+                .withFaceDescriptor();
+            })
+            .then(function(det){ return det ? det.descriptor : null; })
+            .catch(function(err){
+              try { console.warn("[Reco faciale] photo de référence ignorée (" + url + ") : " + (err && err.message ? err.message : err)); } catch (e) {}
+              return null;
+            });
+        }));
+      })
+      .then(function(descriptors){
+        var valid = descriptors.filter(function(d){ return d; });
+        if (!valid.length){
+          throw new Error("aucune photo de référence n'a pu être analysée (visage non détecté ou photos inaccessibles)");
+        }
+        var labeled = new faceapi.LabeledFaceDescriptors(REFERENCE_LABEL, valid);
+        faceMatcher = new faceapi.FaceMatcher(labeled, MATCH_DISTANCE_THRESHOLD);
+        modelsReady = true;
+        setResult("Prêt (" + valid.length + "/" + REFERENCE_PHOTO_URLS.length + " photo(s) de référence exploitée(s)) — analyse en cours…", "ok");
+      })
+      .catch(function(err){
+        modelsReady = false;
+        setResult("❌ Impossible d'initialiser la reconnaissance faciale : " + (err && err.message ? err.message : err), "bad");
+        throw err;
+      });
+
+    return loadingPromise;
+  }
+
+  function scanOnce(){
+    if (!video || video.readyState < 2 || !video.videoWidth){
+      setResult("En attente d'image vidéo…", null);
+      return;
+    }
+    safe(function(){
+      var canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceDescriptors()
+        .then(function(detections){
+          if (!running) return; // désactivé entre-temps
+          if (!detections.length){
+            setResult("Aucun visage détecté à l'écran pour le moment.", null);
+            return;
+          }
+          var best = null;
+          detections.forEach(function(d){
+            var match = faceMatcher.findBestMatch(d.descriptor);
+            if (!best || match.distance < best.distance) best = match;
+          });
+          if (best.label === REFERENCE_LABEL){
+            setResult("✅ Pape détecté à l'écran (distance " + best.distance.toFixed(2) + ", " + detections.length + " visage(s) au total).", "ok");
+          } else {
+            setResult(detections.length + " visage(s) détecté(s), mais aucun ne correspond au pape (distance min. " + best.distance.toFixed(2) + ").", "warn");
+          }
+        })
+        .catch(function(err){
+          try { console.warn("[Reco faciale] échec de l'analyse d'une frame : " + (err && err.message ? err.message : err)); } catch (e) {}
+        });
+    });
+  }
+
+  function start(){
+    running = true;
+    if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : désactiver";
+    setResult("Initialisation…", null);
+    ensureReady().then(function(){
+      if (!running) return; // l'utilisateur a désactivé pendant le chargement
+      scanOnce();
+      scanTimer = setInterval(function(){ safe(scanOnce); }, SCAN_INTERVAL_MS);
+    }).catch(function(){
+      running = false;
+      if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : activer";
+    });
+  }
+
+  function stop(){
+    running = false;
+    if (scanTimer){ clearInterval(scanTimer); scanTimer = null; }
+    if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : activer";
+    setResult("Désactivée. Best-effort, jamais fiable à 100% — à ne jamais utiliser pour une décision opérationnelle.", null);
+  }
+
+  if (btn){
+    btn.addEventListener("click", function(){
+      safe(function(){ running ? stop() : start(); });
+    });
   }
 })();
 </script>
