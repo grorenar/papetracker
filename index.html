@@ -3047,13 +3047,13 @@
   // avertissement en console) plutôt que de faire échouer toute l'initialisation — plus la liste est
   // grande, plus la reconnaissance devient robuste aux différents angles/éclairages/expressions.
   var MATCH_DISTANCE_THRESHOLD = 0.6; // seuil par défaut recommandé par face-api.js
-  var SCAN_INTERVAL_MS = 2500;
+  var SCAN_INTERVAL_MS = 500;
   // Le flux KTO montre souvent des visages petits/lointains (plan large sur la foule/l'estrade).
   // On monte la résolution d'analyse (par défaut 416) et on baisse le seuil de confiance (par
   // défaut 0.5) pour le scan en direct uniquement, afin de repérer davantage de petits visages,
   // au prix d'un peu plus de calcul par frame et de plus de détections incertaines.
   function makeLiveScanDetectorOptions(){
-    return new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.3 });
+    return new faceapi.TinyFaceDetectorOptions({ inputSize: 832, scoreThreshold: 0.3 });
   }
 
   var video = document.getElementById("liveVideo");
@@ -3249,48 +3249,78 @@
 
   if (fileInput) fileInput.addEventListener("change", handleFileInputChange);
 
+  // Retourne une Promise qui se résout une fois l'analyse de la frame terminée (succès ou échec),
+  // pour permettre un enchaînement "scan suivant seulement quand le précédent est fini" plutôt
+  // qu'un setInterval fixe qui empilerait les analyses si le calcul dépasse l'intervalle.
   function scanOnce(){
     if (!video || video.readyState < 2 || !video.videoWidth){
       setResult("En attente d'image vidéo…", null);
-      return;
+      return Promise.resolve();
     }
-    safe(function(){
-      var canvas = document.createElement("canvas");
+    var canvas, ctx;
+    try {
+      canvas = document.createElement("canvas");
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    } catch (err) {
+      try { console.warn("[Reco faciale] erreur capture frame : " + (err && err.message ? err.message : err)); } catch (e) {}
+      return Promise.resolve();
+    }
 
-      faceapi.detectAllFaces(canvas, makeLiveScanDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceDescriptors()
-        .then(function(detections){
-          if (!running) return; // désactivé entre-temps
-          if (!detections.length){
-            clearOverlay();
-            setResult("Aucun visage détecté à l'écran pour le moment.", null);
-            return;
-          }
-          if (!faceMatcher){
-            drawDetections(detections, null);
-            setResult(detections.length + " visage(s) détecté(s), mais aucune photo de référence n'est chargée — ajoutez-en via le bouton \u{1F4F7}.", "warn");
-            return;
-          }
-          var matches = detections.map(function(d){ return faceMatcher.findBestMatch(d.descriptor); });
-          drawDetections(detections, matches);
-          var best = null;
-          matches.forEach(function(match){
-            if (!best || match.distance < best.distance) best = match;
-          });
-          if (best.label === REFERENCE_LABEL){
-            setResult("✅ Pape détecté à l'écran (distance " + best.distance.toFixed(2) + ", " + detections.length + " visage(s) au total).", "ok");
-          } else {
-            setResult(detections.length + " visage(s) détecté(s), mais aucun ne correspond au pape (distance min. " + best.distance.toFixed(2) + ").", "warn");
-          }
-        })
-        .catch(function(err){
-          try { console.warn("[Reco faciale] échec de l'analyse d'une frame : " + (err && err.message ? err.message : err)); } catch (e) {}
+    return faceapi.detectAllFaces(canvas, makeLiveScanDetectorOptions())
+      .withFaceLandmarks()
+      .withFaceDescriptors()
+      .then(function(detections){
+        if (!running) return; // désactivé entre-temps
+        if (!detections.length){
+          clearOverlay();
+          setResult("Aucun visage détecté à l'écran pour le moment.", null);
+          return;
+        }
+        if (!faceMatcher){
+          drawDetections(detections, null);
+          setResult(detections.length + " visage(s) détecté(s), mais aucune photo de référence n'est chargée — ajoutez-en via le bouton \u{1F4F7}.", "warn");
+          return;
+        }
+        var matches = detections.map(function(d){ return faceMatcher.findBestMatch(d.descriptor); });
+        drawDetections(detections, matches);
+        var best = null;
+        matches.forEach(function(match){
+          if (!best || match.distance < best.distance) best = match;
         });
+        if (best.label === REFERENCE_LABEL){
+          setResult("✅ Pape détecté à l'écran (distance " + best.distance.toFixed(2) + ", " + detections.length + " visage(s) au total).", "ok");
+        } else {
+          setResult(detections.length + " visage(s) détecté(s), mais aucun ne correspond au pape (distance min. " + best.distance.toFixed(2) + ").", "warn");
+        }
+      })
+      .catch(function(err){
+        try { console.warn("[Reco faciale] échec de l'analyse d'une frame : " + (err && err.message ? err.message : err)); } catch (e) {}
+      });
+  }
+
+  // Boucle auto-planifiée : attend la fin de l'analyse en cours avant de programmer la suivante,
+  // avec SCAN_INTERVAL_MS comme délai minimal entre deux analyses (jamais moins, même si le calcul
+  // est très rapide), pour éviter d'empiler les frames si l'analyse devient plus lente que l'intervalle.
+  function scheduleNextScan(){
+    if (!running) return;
+    var startedAt = Date.now();
+    safe(function(){
+      var result = scanOnce();
+      if (result && typeof result.then === "function"){
+        result.then(function(){ scheduleAfterMinDelay(startedAt); }, function(){ scheduleAfterMinDelay(startedAt); });
+      } else {
+        scheduleAfterMinDelay(startedAt);
+      }
     });
+  }
+  function scheduleAfterMinDelay(startedAt){
+    if (!running) return;
+    var elapsed = Date.now() - startedAt;
+    var delay = Math.max(0, SCAN_INTERVAL_MS - elapsed);
+    scanTimer = setTimeout(scheduleNextScan, delay);
   }
 
   function start(){
@@ -3305,8 +3335,7 @@
       if (!referenceDescriptors.length){
         setResult("Modèles prêts, mais aucune photo de référence disponible — ajoutez-en via le bouton \u{1F4F7} pour activer la comparaison.", "warn");
       }
-      scanOnce();
-      scanTimer = setInterval(function(){ safe(scanOnce); }, SCAN_INTERVAL_MS);
+      scheduleNextScan();
     }).catch(function(){
       running = false;
       if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : activer";
@@ -3315,7 +3344,7 @@
 
   function stop(){
     running = false;
-    if (scanTimer){ clearInterval(scanTimer); scanTimer = null; }
+    if (scanTimer){ clearTimeout(scanTimer); scanTimer = null; }
     if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : activer";
     clearOverlay();
     setResult("Désactivée. Best-effort, jamais fiable à 100% — à ne jamais utiliser pour une décision opérationnelle.", null);
