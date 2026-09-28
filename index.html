@@ -1138,6 +1138,8 @@
       </div>
       <div class="live-foot" style="border-top:1px dashed var(--border);">
         <button class="btn" id="faceRecoBtn" title="Reconnaissance faciale expérimentale (face-api.js, entièrement dans le navigateur)">&#128064; Reconnaissance faciale (expérimental) : activer</button>
+        <label class="btn" for="faceRecoFileInput" style="cursor:pointer;" title="Ajouter une ou plusieurs photos du pape depuis cet ordinateur (utile si les photos Wikimedia sont bloquées par le réseau)">&#128247; Ajouter photo(s) de référence</label>
+        <input type="file" id="faceRecoFileInput" accept="image/*" multiple style="display:none;">
         <span class="live-foot-note" id="faceRecoResult">Désactivée. Best-effort, jamais fiable à 100% &mdash; à ne jamais utiliser pour une décision opérationnelle.</span>
       </div>
     </div>
@@ -3041,12 +3043,15 @@
   var video = document.getElementById("liveVideo");
   var btn = document.getElementById("faceRecoBtn");
   var resultEl = document.getElementById("faceRecoResult");
+  var fileInput = document.getElementById("faceRecoFileInput");
 
   var scanTimer = null;
   var running = false;
   var faceMatcher = null;
+  var modelsLoadingPromise = null;
   var modelsReady = false;
-  var loadingPromise = null;
+  var referenceDescriptors = []; // pool alimenté par Wikimedia (best-effort) + photos ajoutées manuellement
+  var commonsAttempted = false;
 
   function safe(fn){
     try { fn(); } catch (err) {
@@ -3070,13 +3075,23 @@
     });
   }
 
-  // Charge face-api.js, ses modèles, et calcule les empreintes de référence du pape à partir des
-  // photos ci-dessus. Ne fait ce travail (potentiellement long, plusieurs Mo de poids de modèle) que la
-  // première fois qu'on active la reconnaissance, pas au chargement de la page.
-  function ensureReady(){
-    if (loadingPromise) return loadingPromise;
+  function rebuildMatcher(){
+    if (!referenceDescriptors.length || !window.faceapi){
+      faceMatcher = null;
+      return;
+    }
+    var labeled = new faceapi.LabeledFaceDescriptors(REFERENCE_LABEL, referenceDescriptors);
+    faceMatcher = new faceapi.FaceMatcher(labeled, MATCH_DISTANCE_THRESHOLD);
+  }
 
-    loadingPromise = Promise.resolve()
+  // Charge uniquement face-api.js + ses 3 modèles de détection/reconnaissance (nécessaire pour
+  // analyser N'IMPORTE QUELLE photo, y compris celles ajoutées manuellement). Ne dépend d'aucune photo
+  // de référence — c'est volontairement séparé, pour que l'ajout de photo depuis l'ordinateur reste
+  // possible même si les photos Wikimedia sont bloquées par le réseau (déjà vu sur ce réseau hospitalier
+  // pour d'autres services externes).
+  function ensureModelsLoaded(){
+    if (modelsLoadingPromise) return modelsLoadingPromise;
+    modelsLoadingPromise = Promise.resolve()
       .then(function(){
         if (window.faceapi) return;
         setResult("Chargement de la bibliothèque de reconnaissance faciale…", null);
@@ -3090,40 +3105,97 @@
           faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_BASE + "face_recognition")
         ]);
       })
-      .then(function(){
-        setResult("Analyse des photos de référence du pape…", null);
-        return Promise.all(REFERENCE_PHOTO_URLS.map(function(url){
-          return faceapi.fetchImage(url)
-            .then(function(img){
-              return faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
-                .withFaceLandmarks()
-                .withFaceDescriptor();
-            })
-            .then(function(det){ return det ? det.descriptor : null; })
-            .catch(function(err){
-              try { console.warn("[Reco faciale] photo de référence ignorée (" + url + ") : " + (err && err.message ? err.message : err)); } catch (e) {}
-              return null;
-            });
-        }));
-      })
-      .then(function(descriptors){
-        var valid = descriptors.filter(function(d){ return d; });
-        if (!valid.length){
-          throw new Error("aucune photo de référence n'a pu être analysée (visage non détecté ou photos inaccessibles)");
-        }
-        var labeled = new faceapi.LabeledFaceDescriptors(REFERENCE_LABEL, valid);
-        faceMatcher = new faceapi.FaceMatcher(labeled, MATCH_DISTANCE_THRESHOLD);
-        modelsReady = true;
-        setResult("Prêt (" + valid.length + "/" + REFERENCE_PHOTO_URLS.length + " photo(s) de référence exploitée(s)) — analyse en cours…", "ok");
-      })
+      .then(function(){ modelsReady = true; })
       .catch(function(err){
         modelsReady = false;
-        setResult("❌ Impossible d'initialiser la reconnaissance faciale : " + (err && err.message ? err.message : err), "bad");
+        modelsLoadingPromise = null; // permet de réessayer plus tard (ex. après reconnexion réseau)
+        setResult("❌ Impossible de charger la bibliothèque/modèles de reconnaissance faciale : " + (err && err.message ? err.message : err), "bad");
         throw err;
       });
-
-    return loadingPromise;
+    return modelsLoadingPromise;
   }
+
+  // Essaie les photos Wikimedia une seule fois (best-effort, jamais bloquant) : si elles sont
+  // inaccessibles (réseau, CORS, fichier renommé), on continue simplement avec un pool vide — l'ajout
+  // manuel de photos reste toujours possible.
+  function tryLoadCommonsPhotos(){
+    if (commonsAttempted) return Promise.resolve();
+    commonsAttempted = true;
+    setResult("Analyse des photos de référence Wikimedia…", null);
+    return Promise.all(REFERENCE_PHOTO_URLS.map(function(url){
+      return faceapi.fetchImage(url)
+        .then(function(img){
+          return faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+        })
+        .then(function(det){ return det ? det.descriptor : null; })
+        .catch(function(err){
+          try { console.warn("[Reco faciale] photo Wikimedia ignorée (" + url + ") : " + (err && err.message ? err.message : err)); } catch (e) {}
+          return null;
+        });
+    })).then(function(descriptors){
+      var valid = descriptors.filter(function(d){ return d; });
+      valid.forEach(function(d){ referenceDescriptors.push(d); });
+      rebuildMatcher();
+      if (valid.length){
+        try { console.log("[Reco faciale] " + valid.length + "/" + REFERENCE_PHOTO_URLS.length + " photo(s) Wikimedia exploitée(s)."); } catch (e) {}
+      } else {
+        try { console.warn("[Reco faciale] aucune des " + REFERENCE_PHOTO_URLS.length + " photos Wikimedia n'a pu être utilisée (réseau/CORS/fichier renommé) — voir avertissements ci-dessus pour la cause exacte de chacune."); } catch (e) {}
+      }
+    });
+  }
+
+  // Ajoute une photo choisie sur l'ordinateur de l'utilisateur comme référence : contourne tout
+  // problème réseau/CORS puisque le fichier est lu localement, sans requête externe.
+  function addReferenceImageFile(file){
+    return ensureModelsLoaded().then(function(){
+      var objectUrl = URL.createObjectURL(file);
+      var img = new Image();
+      return new Promise(function(resolve, reject){
+        img.onload = function(){ resolve(img); };
+        img.onerror = function(){ reject(new Error("image illisible")); };
+        img.src = objectUrl;
+      }).then(function(loadedImg){
+        return faceapi.detectSingleFace(loadedImg, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+      }).then(function(det){
+        URL.revokeObjectURL(objectUrl);
+        if (!det){
+          throw new Error("aucun visage détecté dans \"" + file.name + "\"");
+        }
+        referenceDescriptors.push(det.descriptor);
+        rebuildMatcher();
+        return true;
+      }).catch(function(err){
+        URL.revokeObjectURL(objectUrl);
+        throw err;
+      });
+    });
+  }
+
+  function handleFileInputChange(evt){
+    var files = Array.prototype.slice.call((evt.target && evt.target.files) || []);
+    if (!files.length) return;
+    setResult("Analyse de " + files.length + " photo(s) ajoutée(s)…", null);
+    var okCount = 0;
+    var failNames = [];
+    files.reduce(function(chain, file){
+      return chain.then(function(){
+        return addReferenceImageFile(file).then(function(){ okCount++; }).catch(function(err){
+          failNames.push(file.name + " (" + (err && err.message ? err.message : "erreur") + ")");
+        });
+      });
+    }, Promise.resolve()).then(function(){
+      var msg = okCount + "/" + files.length + " photo(s) ajoutée(s) avec succès. Total de photos de référence : " + referenceDescriptors.length + ".";
+      if (failNames.length) msg += " Ignorées : " + failNames.join(", ") + ".";
+      setResult(msg, okCount ? "ok" : "bad");
+      if (evt.target) evt.target.value = ""; // permet de réajouter le même fichier si besoin
+    });
+  }
+
+  if (fileInput) fileInput.addEventListener("change", handleFileInputChange);
 
   function scanOnce(){
     if (!video || video.readyState < 2 || !video.videoWidth){
@@ -3143,6 +3215,10 @@
           if (!running) return; // désactivé entre-temps
           if (!detections.length){
             setResult("Aucun visage détecté à l'écran pour le moment.", null);
+            return;
+          }
+          if (!faceMatcher){
+            setResult(detections.length + " visage(s) détecté(s), mais aucune photo de référence n'est chargée — ajoutez-en via le bouton \u{1F4F7}.", "warn");
             return;
           }
           var best = null;
@@ -3166,8 +3242,14 @@
     running = true;
     if (btn) btn.textContent = "👁️ Reconnaissance faciale (expérimental) : désactiver";
     setResult("Initialisation…", null);
-    ensureReady().then(function(){
+    ensureModelsLoaded().then(function(){
       if (!running) return; // l'utilisateur a désactivé pendant le chargement
+      // Chargement des photos Wikimedia en best-effort : ne bloque jamais le démarrage,
+      // et n'empêche pas l'ajout de photos locales même si ça échoue.
+      tryLoadCommonsPhotos().catch(function(){});
+      if (!referenceDescriptors.length){
+        setResult("Modèles prêts, mais aucune photo de référence disponible — ajoutez-en via le bouton \u{1F4F7} pour activer la comparaison.", "warn");
+      }
       scanOnce();
       scanTimer = setInterval(function(){ safe(scanOnce); }, SCAN_INTERVAL_MS);
     }).catch(function(){
